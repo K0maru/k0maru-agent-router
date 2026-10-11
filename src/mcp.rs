@@ -193,6 +193,18 @@ impl<D: MultiplexerDriver + Clone> McpServer<D> {
                         "outbox_dir": {
                             "type": "string",
                             "description": "Optional path to the staged outbox directory (defaults to .scratch/staged)"
+                        },
+                        "candidates": {
+                            "type": "array",
+                            "description": "Optional candidate targets for decision engine resolution when target is ambiguous",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "identifier": { "type": "string", "description": "Target identifier" },
+                                    "description": { "type": "string", "description": "Semantic role or description" }
+                                },
+                                "required": ["identifier"]
+                            }
                         }
                     }
                 }
@@ -469,8 +481,43 @@ impl<D: MultiplexerDriver + Clone> McpServer<D> {
             }
         };
 
-        if let Err(e) = envelope.validate() {
-            return McpToolCallResult::error(format!("Envelope validation failed: {e}"));
+        let mut candidate_tuples: Vec<(String, String)> = Vec::new();
+        if let Some(candidates_arr) = args.get("candidates").and_then(|v| v.as_array()) {
+            for item in candidates_arr {
+                if let Some(obj) = item.as_object() {
+                    let id = obj
+                        .get("identifier")
+                        .or_else(|| obj.get("id"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+                    let desc = obj
+                        .get("description")
+                        .or_else(|| obj.get("desc"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+                    if !id.is_empty() {
+                        candidate_tuples.push((id.to_string(), desc.to_string()));
+                    }
+                } else if let Some(arr) = item.as_array() {
+                    let id = arr.first().and_then(|v| v.as_str()).unwrap_or("");
+                    let desc = arr.get(1).and_then(|v| v.as_str()).unwrap_or("");
+                    if !id.is_empty() {
+                        candidate_tuples.push((id.to_string(), desc.to_string()));
+                    }
+                } else if let Some(s) = item.as_str() {
+                    candidate_tuples.push((s.to_string(), String::new()));
+                }
+            }
+        }
+
+        let is_ambiguous = envelope.target.identifier == "auto"
+            || envelope.target.identifier == "unspecified"
+            || !candidate_tuples.is_empty();
+
+        if !is_ambiguous {
+            if let Err(e) = envelope.validate() {
+                return McpToolCallResult::error(format!("Envelope validation failed: {e}"));
+            }
         }
 
         let coordinator = if let Some(dir) = outbox_dir_override {
@@ -479,7 +526,12 @@ impl<D: MultiplexerDriver + Clone> McpServer<D> {
             self.coordinator.clone()
         };
 
-        match coordinator.route_envelope(&envelope, dry_run) {
+        let candidate_refs: Vec<(&str, &str)> = candidate_tuples
+            .iter()
+            .map(|(id, desc)| (id.as_str(), desc.as_str()))
+            .collect();
+
+        match coordinator.route_envelope_with_candidates(&envelope, &candidate_refs, dry_run) {
             Ok(outcome) => {
                 let status_str = match &outcome {
                     RouteOutcome::Dispatched { .. } => "dispatched",
