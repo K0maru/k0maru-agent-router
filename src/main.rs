@@ -36,6 +36,7 @@ impl Cli {
             Commands::InspectStaged(_) => false,
             Commands::Approve(args) => args.json,
             Commands::Reject(args) => args.json,
+            Commands::Mcp(_) => false,
         }
     }
 }
@@ -50,6 +51,9 @@ enum Commands {
 
     /// Route or stage a task envelope JSON file
     Route(RouteArgs),
+
+    /// Run as a JSON-RPC 2.0 stdio Model Context Protocol (MCP) server
+    Mcp(McpArgs),
 
     /// Manage staged external issues in the HITL outbox holding area
     Outbox(OutboxCommand),
@@ -147,6 +151,17 @@ impl RouteArgs {
             .or(self.positional_file.as_deref())
             .unwrap_or_else(|| Path::new(""))
     }
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct McpArgs {
+    /// Multiplexer driver to use (supported: tmux)
+    #[arg(long, default_value = "tmux")]
+    pub driver: String,
+
+    /// Path to the staged outbox directory
+    #[arg(long, default_value = ".scratch/staged")]
+    pub outbox_dir: PathBuf,
 }
 
 #[derive(Args, Debug, Clone)]
@@ -490,11 +505,19 @@ fn handle_outbox_reject(args: OutboxRejectArgs) -> Result<(), RouterError> {
     Ok(())
 }
 
+fn handle_mcp(args: McpArgs) -> Result<(), RouterError> {
+    let driver = resolve_driver(&args.driver)?;
+    let coordinator = RouterCoordinator::new(driver).with_outbox_dir(&args.outbox_dir);
+    let server = k0maru_router::McpServer::new(coordinator);
+    server.run_stdio().map_err(RouterError::Io)
+}
+
 fn run(cli: Cli) -> Result<(), RouterError> {
     match cli.command {
         Commands::Status(args) => handle_status(args),
         Commands::Probe(args) => handle_probe(args),
         Commands::Route(args) => handle_route(args),
+        Commands::Mcp(args) => handle_mcp(args),
         Commands::Outbox(cmd) => match cmd.action {
             OutboxAction::List(args) => handle_outbox_list(args),
             OutboxAction::Inspect(args) => handle_outbox_inspect(args),

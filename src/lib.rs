@@ -7,6 +7,7 @@ pub mod coordinator;
 pub mod driver;
 pub mod envelope;
 pub mod error;
+pub mod mcp;
 pub mod outbox;
 pub mod policy;
 
@@ -24,5 +25,8 @@ pub use envelope::{
     VALID_SEVERITIES,
 };
 pub use error::RouterError;
+pub use mcp::{
+    JsonRpcError, JsonRpcRequest, JsonRpcResponse, McpServer, McpToolCallResult, McpToolContent,
+};
 pub use outbox::{HitlOutbox, StagedIssueStatus, StagedIssueSummary, StagedStatus};
 pub use policy::{BoundaryPolicy, PolicyVerdict};
