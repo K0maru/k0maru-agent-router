@@ -97,7 +97,17 @@ Implementations:
 
 ## 4. Decision Engine SPI (Phase 3 Specification)
 
-When an incoming `TaskEnvelope` does not contain an explicit `target.workspace` or requires dynamic classification among multiple candidate workspaces, the `DecisionEngine` resolves the optimal destination.
+### Distributed Topology Node Specialization
+In a multi-node distributed harness (Cockpit, Compute, Storage, Edge), ambiguity exists **only at the ingress control plane**:
+- **Cockpit / Ingress Plane (Developer Laptop / CI Gateway)**: Directly interfaces with humans and external alert streams. May *optionally* mount a lightweight decision model (Laya / Jev) to resolve ambiguous bug reports among multiple candidate repositories.
+- **Worker / Compute / Edge Nodes (Linux GPU Boxes, Raspberry Pi, Jetson, CI Runners)**: Downstream nodes receive already-pinned, immutable `TaskEnvelope` contracts with explicit `target.workspace`. **Worker nodes strictly run in zero-model pure dispatch mode**, requiring zero Python/PyTorch/CUDA runtime dependencies and zero VRAM footprint (<15MB static memory).
+
+### Zero-Cost Invariant & Optionality
+A decision model is **never mandatory**. Over 90% of tasks have an explicit target and bypass the decision engine entirely (<1ms, $0 cost).
+- **`NoopDecisionEngine` (Default)**: Pure pass-through with zero overhead.
+- When an incoming task lacks an explicit target:
+  - If a decision engine is configured: it evaluates candidate targets.
+  - If no decision engine is configured: it safely quarantines the task to `.scratch/staged/` (HITL Outbox) for human confirmation, rather than guessing or crashing.
 
 ```rust
 #[async_trait]
@@ -129,8 +139,8 @@ pub struct DecisionRoutingOutcome {
 ### Pluggable Engines:
 1. **`DeterministicRuleEngine`**:
    - Exact string matching, globs, or regular expressions against envelope fields (`caller.workspace`, `payload.title`, etc.).
-   - Execution latency: ~1ms / $0 cost.
-2. **`DecisionModelEngine` (System 1 & System 2)**:
+   - Execution latency: ~1ms / $0 cost. Zero model dependencies.
+2. **`DecisionModelEngine` (System 1 & System 2, Optional)**:
    - **Laya Client (`LayaDecisionClient`)**: Open-source non-autoregressive decision model (Convai Innovations, ModernBERT-large 421M). Single forward pass (32~50ms), zero hallucination, mathematically calibrated probabilities via RLCD. Uses `choice` primitive on `POST /v1/systemone`.
    - **TypeSafe Jev Client (`JevClient`)**: Commercial cloud fallback consuming identical `POST /v1/systemone` wire protocol.
    - **Structured LLM Client**: OpenAI-compatible chat completions fallback enforcing JSON Schema structured output for complex long-context reasoning.
