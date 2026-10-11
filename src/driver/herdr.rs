@@ -80,7 +80,9 @@ impl MultiplexerDriver for HerdrDriver {
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(RouterError::DriverExecutionFailed(stderr.trim().to_string()));
+            return Err(RouterError::DriverExecutionFailed(
+                stderr.trim().to_string(),
+            ));
         }
 
         let resp: HerdrPaneListResponse = serde_json::from_slice(&output.stdout).map_err(|e| {
@@ -97,12 +99,7 @@ impl MultiplexerDriver for HerdrDriver {
                     };
                     let norm_cwd = normalize_workspace_path(&pane.cwd)
                         .unwrap_or_else(|_| PathBuf::from(&pane.cwd));
-                    sessions.push(LiveSession::new(
-                        pane.pane_id,
-                        norm_cwd,
-                        status,
-                        pane.agent,
-                    ));
+                    sessions.push(LiveSession::new(pane.pane_id, norm_cwd, status, pane.agent));
                 }
             }
         }
@@ -138,7 +135,9 @@ impl MultiplexerDriver for HerdrDriver {
             Ok(())
         } else {
             let stderr = String::from_utf8_lossy(&pane_out.stderr);
-            Err(RouterError::DriverExecutionFailed(stderr.trim().to_string()))
+            Err(RouterError::DriverExecutionFailed(
+                stderr.trim().to_string(),
+            ))
         }
     }
 
@@ -170,7 +169,9 @@ impl MultiplexerDriver for HerdrDriver {
             .map_err(|e| RouterError::DriverExecutionFailed(e.to_string()))?;
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(RouterError::DriverExecutionFailed(stderr.trim().to_string()));
+            return Err(RouterError::DriverExecutionFailed(
+                stderr.trim().to_string(),
+            ));
         }
 
         let resp: HerdrPaneSplitResponse = serde_json::from_slice(&output.stdout).map_err(|e| {
@@ -179,22 +180,18 @@ impl MultiplexerDriver for HerdrDriver {
             ))
         })?;
 
-        let pane = resp
-            .result
-            .and_then(|r| r.pane)
-            .ok_or_else(|| {
-                RouterError::DriverExecutionFailed(
-                    "Herdr pane split response missing pane details".to_string(),
-                )
-            })?;
+        let pane = resp.result.and_then(|r| r.pane).ok_or_else(|| {
+            RouterError::DriverExecutionFailed(
+                "Herdr pane split response missing pane details".to_string(),
+            )
+        })?;
 
         let cwd_path: PathBuf = pane
             .cwd
             .as_deref()
             .map(PathBuf::from)
             .unwrap_or_else(|| workspace.to_path_buf());
-        let norm_cwd = normalize_workspace_path(&cwd_path)
-            .unwrap_or_else(|_| cwd_path);
+        let norm_cwd = normalize_workspace_path(&cwd_path).unwrap_or(cwd_path);
 
         Ok(LiveSession::new(
             pane.pane_id,
