@@ -3,8 +3,10 @@
 //! Provides the pluggable `MultiplexerDriver` abstraction and session state models
 //! for interacting with terminal multiplexers (such as `tmux` or `herdr`).
 
+pub mod herdr;
 pub mod tmux;
 
+pub use herdr::HerdrDriver;
 pub use tmux::{parse_pane_line, parse_tmux_output, TmuxDriver};
 
 use crate::error::RouterError;
@@ -105,4 +107,52 @@ pub trait MultiplexerDriver: Send + Sync {
         workspace: &Path,
         command: Option<&str>,
     ) -> Result<LiveSession, RouterError>;
+}
+
+/// Unified driver enum selecting between available multiplexer implementations.
+#[derive(Debug, Clone)]
+pub enum AnyDriver {
+    Tmux(TmuxDriver),
+    Herdr(HerdrDriver),
+}
+
+impl MultiplexerDriver for AnyDriver {
+    fn name(&self) -> &'static str {
+        match self {
+            Self::Tmux(d) => d.name(),
+            Self::Herdr(d) => d.name(),
+        }
+    }
+
+    fn is_available(&self) -> bool {
+        match self {
+            Self::Tmux(d) => d.is_available(),
+            Self::Herdr(d) => d.is_available(),
+        }
+    }
+
+    fn list_sessions(&self) -> Result<Vec<LiveSession>, RouterError> {
+        match self {
+            Self::Tmux(d) => d.list_sessions(),
+            Self::Herdr(d) => d.list_sessions(),
+        }
+    }
+
+    fn send_prompt(&self, pane_id: &str, prompt: &str) -> Result<(), RouterError> {
+        match self {
+            Self::Tmux(d) => d.send_prompt(pane_id, prompt),
+            Self::Herdr(d) => d.send_prompt(pane_id, prompt),
+        }
+    }
+
+    fn spawn_pane(
+        &self,
+        workspace: &Path,
+        command: Option<&str>,
+    ) -> Result<LiveSession, RouterError> {
+        match self {
+            Self::Tmux(d) => d.spawn_pane(workspace, command),
+            Self::Herdr(d) => d.spawn_pane(workspace, command),
+        }
+    }
 }

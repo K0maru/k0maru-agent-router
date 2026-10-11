@@ -194,12 +194,26 @@ impl MultiplexerDriver for TmuxDriver {
 
         let stdout = String::from_utf8_lossy(&output.stdout);
         let first_line = stdout.lines().next().unwrap_or("").trim();
-        parse_pane_line(first_line).ok_or_else(|| {
-            RouterError::DriverExecutionFailed(format!(
-                "Failed to parse newly spawned pane details from tmux output: '{}'",
-                first_line
-            ))
-        })
+        if let Some(session) = parse_pane_line(first_line) {
+            Ok(session)
+        } else {
+            let parts: Vec<&str> = first_line.split('\t').collect();
+            if !parts.is_empty() && parts[0].starts_with('%') {
+                let pid = parts[0].trim();
+                let cmd = if parts.len() >= 3 && !parts[2].trim().is_empty() {
+                    Some(parts[2].trim().to_string())
+                } else {
+                    command.map(|c| c.to_string())
+                };
+                let status = SessionStatus::from_command(cmd.as_deref());
+                Ok(LiveSession::new(pid, canonical_workspace, status, cmd))
+            } else {
+                Err(RouterError::DriverExecutionFailed(format!(
+                    "Failed to parse newly spawned pane details from tmux output: '{}'",
+                    first_line
+                )))
+            }
+        }
     }
 }
 

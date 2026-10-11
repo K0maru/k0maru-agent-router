@@ -2,7 +2,7 @@
 
 use clap::{Args, Parser, Subcommand};
 use k0maru_router::coordinator::{RouteOutcome, RouterCoordinator};
-use k0maru_router::driver::TmuxDriver;
+use k0maru_router::driver::{AnyDriver, HerdrDriver, MultiplexerDriver, TmuxDriver};
 use k0maru_router::envelope::TaskEnvelope;
 use k0maru_router::error::RouterError;
 use std::path::{Path, PathBuf};
@@ -81,6 +81,10 @@ pub struct StatusArgs {
     /// Path to the staged outbox directory
     #[arg(long, default_value = ".scratch/staged")]
     pub outbox_dir: PathBuf,
+
+    /// Multiplexer driver to inspect (supported: tmux, herdr, auto)
+    #[arg(long, default_value = "tmux")]
+    pub driver: String,
 
     /// Output status in machine-readable JSON format
     #[arg(long)]
@@ -279,18 +283,29 @@ impl OutboxRejectArgs {
     }
 }
 
-fn resolve_driver(name: &str) -> Result<TmuxDriver, RouterError> {
+fn resolve_driver(name: &str) -> Result<AnyDriver, RouterError> {
     match name.to_lowercase().as_str() {
-        "tmux" => Ok(TmuxDriver::new()),
+        "tmux" => Ok(AnyDriver::Tmux(TmuxDriver::new())),
+        "herdr" => Ok(AnyDriver::Herdr(HerdrDriver::new())),
+        "auto" => {
+            let herdr = HerdrDriver::new();
+            if herdr.is_available() {
+                Ok(AnyDriver::Herdr(herdr))
+            } else {
+                Ok(AnyDriver::Tmux(TmuxDriver::new()))
+            }
+        }
         _ => Err(RouterError::DriverUnavailable {
             driver: "unsupported",
-            reason: format!("Driver '{name}' is not supported. Supported drivers: tmux"),
+            reason: format!(
+                "Driver '{name}' is not supported. Supported drivers: tmux, herdr, auto"
+            ),
         }),
     }
 }
 
 fn handle_status(args: StatusArgs) -> Result<(), RouterError> {
-    let driver = TmuxDriver::new();
+    let driver = resolve_driver(&args.driver)?;
     let coordinator = RouterCoordinator::new(driver).with_outbox_dir(&args.outbox_dir);
     let status = coordinator.system_status()?;
 
@@ -422,7 +437,7 @@ fn handle_route(args: RouteArgs) -> Result<(), RouterError> {
 }
 
 fn handle_outbox_list(args: OutboxListArgs) -> Result<(), RouterError> {
-    let driver = TmuxDriver::new();
+    let driver = resolve_driver("auto")?;
     let coordinator = RouterCoordinator::new(driver).with_outbox_dir(&args.outbox_dir);
     let summaries = coordinator.list_staged()?;
 
@@ -456,7 +471,7 @@ fn handle_outbox_list(args: OutboxListArgs) -> Result<(), RouterError> {
 }
 
 fn handle_outbox_inspect(args: OutboxInspectArgs) -> Result<(), RouterError> {
-    let driver = TmuxDriver::new();
+    let driver = resolve_driver("auto")?;
     let coordinator = RouterCoordinator::new(driver).with_outbox_dir(&args.outbox_dir);
     let id = args.resolved_id();
     let content = coordinator.inspect_staged(id)?;
@@ -465,7 +480,7 @@ fn handle_outbox_inspect(args: OutboxInspectArgs) -> Result<(), RouterError> {
 }
 
 fn handle_outbox_approve(args: OutboxApproveArgs) -> Result<(), RouterError> {
-    let driver = TmuxDriver::new();
+    let driver = resolve_driver("auto")?;
     let coordinator = RouterCoordinator::new(driver).with_outbox_dir(&args.outbox_dir);
     let id = args.resolved_id();
     let path = coordinator.approve_staged(id)?;
@@ -486,7 +501,7 @@ fn handle_outbox_approve(args: OutboxApproveArgs) -> Result<(), RouterError> {
 }
 
 fn handle_outbox_reject(args: OutboxRejectArgs) -> Result<(), RouterError> {
-    let driver = TmuxDriver::new();
+    let driver = resolve_driver("auto")?;
     let coordinator = RouterCoordinator::new(driver).with_outbox_dir(&args.outbox_dir);
     let id = args.resolved_id();
     coordinator.reject_staged(id)?;
