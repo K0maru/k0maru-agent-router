@@ -1,0 +1,28 @@
+[package]
+name = "k0maru-router"
+version = "0.1.0"
+edition = "2021"
+description = "Cleanroom, single-static-binary Agent Router for K0maru-Harness"
+authors = ["k0maru3"]
+
+[lib]
+name = "k0maru_router"
+path = "src/lib.rs"
+
+[[bin]]
+name = "k0maru-router"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4.5", features = ["derive", "cargo"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+chrono = { version = "0.4", features = ["serde"] }
+thiserror = "1.0"
+anyhow = "1.0"
+uuid = { version = "1.8", features = ["v4", "serde"] }
+
+[dev-dependencies]
+tempfile = "3.10"
+assert_cmd = "2.0"
+predicates = "3.1"
