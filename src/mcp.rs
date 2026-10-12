@@ -349,6 +349,39 @@ impl<D: MultiplexerDriver + Clone> McpServer<D> {
                     }
                 }
             }),
+            serde_json::json!({
+                "name": "check_pipeline_health",
+                "description": "Discovers and checks the operational readiness and availability of optional K0maru-Harness components (k0maru-workspace, k0maru-verifier, k0maru-memory) and storage buses.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {}
+                }
+            }),
+            serde_json::json!({
+                "name": "run_e2e_pipeline",
+                "description": "Executes a decoupled, multi-stage end-to-end task pipeline across optional harness components (sandbox provision, patch application, physical verification, receipt verification, signal emission, and memory crystallization).",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "task_id": { "type": "string", "description": "Unique task identifier" },
+                        "workspace": { "type": "string", "description": "Target workspace directory (default: .)" },
+                        "intent": { "type": "string", "description": "Task intent (default: verify_or_execute)" },
+                        "patch": { "type": "string", "description": "Optional path to git patch file to apply" },
+                        "runner": { "type": "string", "description": "Optional explicit runner override (e.g. cargo, pytest, npm)" },
+                        "isolate": { "type": "boolean", "description": "If true, isolates the task in a Git Worktree sandbox via k0maru-workspace (optional)" },
+                        "verify": { "type": "boolean", "description": "If true, executes deterministic physical verification via k0maru-verifier (optional)" },
+                        "auto_merge": { "type": "boolean", "description": "If true and isolated, teardown and merge sandbox on verification pass" },
+                        "emit_signal": { "type": "boolean", "description": "If true, emits task completion signal to ~/.k0maru/signals/" },
+                        "crystallize_memory": { "type": "boolean", "description": "If true, flushes task outcome to k0maru memory hub (optional)" },
+                        "allowed_files": {
+                            "type": "array",
+                            "items": { "type": "string" },
+                            "description": "Allowed files whitelist for scope guard verification"
+                        }
+                    },
+                    "required": ["task_id"]
+                }
+            }),
         ]
     }
 
@@ -489,6 +522,8 @@ impl<D: MultiplexerDriver + Clone> McpServer<D> {
             "query_receipt" => self.execute_query_receipt(arguments),
             "emit_signal" => self.execute_emit_signal(arguments),
             "orchestrator_status" => self.execute_orchestrator_status(arguments),
+            "check_pipeline_health" => self.execute_check_pipeline_health(arguments),
+            "run_e2e_pipeline" => self.execute_run_e2e_pipeline(arguments),
             unknown => McpToolCallResult::error(format!("Unknown tool: '{unknown}'")),
         }
     }
@@ -907,6 +942,106 @@ impl<D: MultiplexerDriver + Clone> McpServer<D> {
         match serde_json::to_value(&report) {
             Ok(val) => McpToolCallResult::success(val),
             Err(e) => McpToolCallResult::error(format!("Serialization error: {e}")),
+        }
+    }
+
+    /// Handles `check_pipeline_health` tool invocation.
+    fn execute_check_pipeline_health(&self, _args: &serde_json::Value) -> McpToolCallResult {
+        let report = crate::pipeline::probe_harness_components();
+        match serde_json::to_value(&report) {
+            Ok(val) => McpToolCallResult::success(val),
+            Err(e) => McpToolCallResult::error(format!("Serialization error: {e}")),
+        }
+    }
+
+    /// Handles `run_e2e_pipeline` tool invocation.
+    fn execute_run_e2e_pipeline(&self, args: &serde_json::Value) -> McpToolCallResult {
+        let task_id = match args.get("task_id").and_then(|v| v.as_str()) {
+            Some(id) if !id.trim().is_empty() => id.to_string(),
+            _ => return McpToolCallResult::error("Missing or empty 'task_id' parameter"),
+        };
+        let workspace = match args.get("workspace").and_then(|v| v.as_str()) {
+            Some(w) => PathBuf::from(w),
+            None => PathBuf::from("."),
+        };
+        let intent = args
+            .get("intent")
+            .and_then(|v| v.as_str())
+            .map(ToString::to_string);
+        let patch = args
+            .get("patch")
+            .and_then(|v| v.as_str())
+            .map(PathBuf::from);
+        let runner = args
+            .get("runner")
+            .and_then(|v| v.as_str())
+            .map(ToString::to_string);
+        let isolate = args
+            .get("isolate")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let verify = args.get("verify").and_then(|v| v.as_bool()).unwrap_or(true);
+        let auto_merge = args
+            .get("auto_merge")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let emit_signal = args
+            .get("emit_signal")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true);
+        let crystallize_memory = args
+            .get("crystallize_memory")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let allowed_files = args
+            .get("allowed_files")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|x| x.as_str().map(ToString::to_string))
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        let config = crate::pipeline::PipelineConfig {
+            task_id,
+            target_workspace: workspace,
+            intent,
+            patch,
+            runner,
+            isolate,
+            verify,
+            auto_merge,
+            emit_signal,
+            crystallize_memory,
+            allowed_files,
+        };
+
+        let rt = match tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+        {
+            Ok(handle) => handle,
+            Err(e) => {
+                return McpToolCallResult::error(format!("Failed to build async runtime: {e}"))
+            }
+        };
+
+        match rt.block_on(crate::pipeline::execute_pipeline(&config)) {
+            Ok(report) => match serde_json::to_value(&report) {
+                Ok(val) => {
+                    if report.verdict == "success" {
+                        McpToolCallResult::success(val)
+                    } else {
+                        McpToolCallResult::error(format!(
+                            "Pipeline execution {}:\n{}",
+                            report.verdict, val
+                        ))
+                    }
+                }
+                Err(e) => McpToolCallResult::error(format!("Serialization error: {e}")),
+            },
+            Err(e) => McpToolCallResult::error(format!("Pipeline error: {e}")),
         }
     }
 

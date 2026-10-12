@@ -52,6 +52,11 @@ impl Cli {
                 Some(OrchestratorAction::Status(args)) => args.json,
                 None => cmd.args.json,
             },
+            Commands::Pipeline(cmd) => match &cmd.action {
+                Some(PipelineAction::Check(args)) => args.json,
+                Some(PipelineAction::Run(args)) => args.json,
+                None => cmd.run_args.json,
+            },
             Commands::Mcp(_) => false,
         }
     }
@@ -82,6 +87,10 @@ enum Commands {
 
     /// Inspect status of workspaces, git states, latest signals, and receipts
     Orchestrator(OrchestratorCommand),
+
+    /// Execute decoupled end-to-end task pipelines across optional harness components
+    #[command(alias = "e2e")]
+    Pipeline(PipelineCommand),
 }
 
 #[derive(Args, Debug, Clone)]
@@ -467,6 +476,100 @@ pub struct OrchestratorStatusArgs {
     /// Output status in machine-readable JSON format
     #[arg(long)]
     pub json: bool,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct PipelineCommand {
+    #[command(subcommand)]
+    pub action: Option<PipelineAction>,
+
+    #[command(flatten)]
+    pub run_args: PipelineRunArgs,
+}
+
+#[derive(Subcommand, Debug, Clone)]
+pub enum PipelineAction {
+    /// Check the availability and readiness of optional K0maru-Harness components
+    Check(PipelineCheckArgs),
+    /// Run an end-to-end task execution pipeline
+    Run(PipelineRunArgs),
+}
+
+#[derive(Args, Debug, Clone, Default)]
+pub struct PipelineCheckArgs {
+    /// Output result as machine-readable JSON
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct PipelineRunArgs {
+    /// Unique task identifier
+    #[arg(long, default_value = "task_pipeline_e2e")]
+    pub task_id: String,
+
+    /// Target workspace or repository directory
+    #[arg(long, short, default_value = ".")]
+    pub workspace: PathBuf,
+
+    /// High-level task intent
+    #[arg(long, default_value = "verify_or_execute")]
+    pub intent: String,
+
+    /// Optional git patch file to apply
+    #[arg(long)]
+    pub patch: Option<PathBuf>,
+
+    /// Optional explicit test runner override (e.g. cargo, pytest, npm)
+    #[arg(long)]
+    pub runner: Option<String>,
+
+    /// Isolate execution in a Git Worktree sandbox via k0maru-workspace (optional)
+    #[arg(long)]
+    pub isolate: bool,
+
+    /// Execute physical test oracle verification via k0maru-verifier (optional)
+    #[arg(long, default_value_t = true)]
+    pub verify: bool,
+
+    /// Automatically merge and teardown sandbox on verification pass (No-Receipt-No-Merge)
+    #[arg(long)]
+    pub merge: bool,
+
+    /// Emit task execution completion signal to ~/.k0maru/signals/
+    #[arg(long, default_value_t = true)]
+    pub signal: bool,
+
+    /// Crystallize task outcome into k0maru memory hub (optional)
+    #[arg(long)]
+    pub flush: bool,
+
+    /// Allowed files whitelist for scope guard
+    #[arg(long = "allowed-files")]
+    pub allowed_files: Vec<String>,
+
+    /// Output report as JSON
+    #[arg(long)]
+    pub json: bool,
+}
+
+impl Default for PipelineRunArgs {
+    fn default() -> Self {
+        Self {
+            task_id: "task_pipeline_e2e".to_string(),
+            workspace: PathBuf::from("."),
+            intent: "verify_or_execute".to_string(),
+            patch: None,
+            runner: None,
+            isolate: false,
+            verify: true,
+            merge: false,
+            signal: true,
+            flush: false,
+            allowed_files: Vec::new(),
+            json: false,
+        }
+    }
 }
 
 fn resolve_driver(name: &str) -> Result<AnyDriver, RouterError> {
@@ -1006,6 +1109,108 @@ fn handle_orchestrator(cmd: OrchestratorCommand) -> Result<(), RouterError> {
     Ok(())
 }
 
+fn handle_pipeline(cmd: PipelineCommand) -> Result<(), RouterError> {
+    match cmd.action {
+        Some(PipelineAction::Check(args)) => {
+            let report = k0maru_router::probe_harness_components();
+            if args.json {
+                let json = serde_json::to_string_pretty(&report)?;
+                println!("{json}");
+            } else {
+                println!("=== K0maru-Harness Component Readiness ===");
+                println!(
+                    "Status: {}",
+                    if report.is_complete {
+                        "COMPLETE (All 4 Pillars Ready)"
+                    } else {
+                        "MODULAR (Partial Components Active)"
+                    }
+                );
+                for c in &report.components {
+                    let mark = if c.is_available { "✓" } else { "✗" };
+                    let opt = if c.is_optional {
+                        "(optional)"
+                    } else {
+                        "(required)"
+                    };
+                    let path_str = c.path.as_deref().unwrap_or("not found");
+                    println!(
+                        "  [{mark}] {:<18} {:<10} {} [{}]",
+                        c.name, opt, c.description, path_str
+                    );
+                }
+                println!("Receipts Bus : {}", report.receipts_dir);
+                println!("Signals Bus  : {}", report.signals_dir);
+            }
+            Ok(())
+        }
+        Some(PipelineAction::Run(args)) => run_pipeline_args(args),
+        None => run_pipeline_args(cmd.run_args),
+    }
+}
+
+fn run_pipeline_args(args: PipelineRunArgs) -> Result<(), RouterError> {
+    let is_json = args.json;
+    let config = k0maru_router::PipelineConfig {
+        task_id: args.task_id,
+        target_workspace: args.workspace,
+        intent: Some(args.intent),
+        patch: args.patch,
+        runner: args.runner,
+        isolate: args.isolate,
+        verify: args.verify,
+        auto_merge: args.merge,
+        emit_signal: args.signal,
+        crystallize_memory: args.flush,
+        allowed_files: args.allowed_files,
+    };
+
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|e| RouterError::PipelineError(format!("Failed to build runtime: {e}")))?;
+
+    let report = rt.block_on(k0maru_router::execute_pipeline(&config))?;
+
+    if is_json {
+        let json = serde_json::to_string_pretty(&report)?;
+        println!("{json}");
+    } else {
+        println!("=== K0maru Pipeline Run: {} ===", report.task_id);
+        println!(
+            "Verdict: {} (duration: {}ms)",
+            report.verdict.to_uppercase(),
+            report.duration_ms
+        );
+        println!("Stages:");
+        for s in &report.stages {
+            let mark = match s.status.as_str() {
+                "passed" => "✓",
+                "skipped" => "-",
+                _ => "✗",
+            };
+            println!(
+                "  [{mark}] {:<26} [{:>5}ms] {}",
+                s.stage, s.duration_ms, s.message
+            );
+        }
+        if let Some(ref rid) = report.receipt_id {
+            println!("Receipt ID: {}", rid);
+        }
+        if report.signal_emitted {
+            println!("Signal    : Emitted to bus");
+        }
+    }
+
+    if report.verdict != "success" && report.verdict != "skipped" {
+        return Err(RouterError::PipelineError(format!(
+            "Pipeline stage failure in task {}",
+            report.task_id
+        )));
+    }
+    Ok(())
+}
+
 fn run(cli: Cli) -> Result<(), RouterError> {
     match cli.command {
         Commands::Status(args) => handle_status(args),
@@ -1021,6 +1226,7 @@ fn run(cli: Cli) -> Result<(), RouterError> {
         Commands::Receipt(cmd) => handle_receipt(cmd),
         Commands::Signal(args) => handle_signal(args),
         Commands::Orchestrator(cmd) => handle_orchestrator(cmd),
+        Commands::Pipeline(cmd) => handle_pipeline(cmd),
     }
 }
 
@@ -1053,6 +1259,7 @@ fn main() -> ExitCode {
                     RouterError::InvalidSignal(_) => "InvalidSignal",
                     RouterError::SignalNotFound(_) => "SignalNotFound",
                     RouterError::WorkspaceError(_) => "WorkspaceError",
+                    RouterError::PipelineError(_) => "PipelineError",
                 };
                 let json_err = serde_json::json!({
                     "status": "error",

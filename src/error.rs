@@ -68,6 +68,10 @@ pub enum RouterError {
     /// Workspace provisioning or teardown error.
     #[error("Workspace error: {0}")]
     WorkspaceError(String),
+
+    /// Pipeline coordination or execution error.
+    #[error("Pipeline error: {0}")]
+    PipelineError(String),
 }
 
 impl PartialEq for RouterError {
@@ -97,6 +101,7 @@ impl PartialEq for RouterError {
             (Self::InvalidSignal(a), Self::InvalidSignal(b)) => a == b,
             (Self::SignalNotFound(a), Self::SignalNotFound(b)) => a == b,
             (Self::WorkspaceError(a), Self::WorkspaceError(b)) => a == b,
+            (Self::PipelineError(a), Self::PipelineError(b)) => a == b,
             _ => false,
         }
     }
