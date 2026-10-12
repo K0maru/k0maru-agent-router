@@ -290,7 +290,7 @@ fn test_receipt_constants_contract() {
 }
 
 #[test]
-fn test_resolve_receipts_dir_precedence() {
+fn test_resolve_receipts_dir_precedence_and_store_default() {
     let tmp = tempdir().unwrap();
     let override_dir = tmp.path().join("custom_override");
     let env_dir = tmp.path().join("env_override");
@@ -303,6 +303,7 @@ fn test_resolve_receipts_dir_precedence() {
     // Priority 2: Environment variable wins when override is None
     let resolved_p2 = resolve_receipts_dir(None);
     assert_eq!(resolved_p2, env_dir);
+    assert_eq!(ReceiptStore::default().base_dir(), env_dir);
 
     // Clean up env var
     std::env::remove_var(ENV_K0MARU_RECEIPT_DIR);
@@ -320,12 +321,49 @@ fn test_resolve_receipts_dir_precedence() {
             PathBuf::from(DEFAULT_K0MARU_DIR).join(DEFAULT_RECEIPTS_DIR)
         );
     }
+
+    let default_store = ReceiptStore::default();
+    assert_eq!(default_store.base_dir(), resolved_p3);
+    assert_eq!(ReceiptStore::default_dir(), resolved_p3);
 }
 
 #[test]
-fn test_receipt_store_default_uses_resolver() {
-    std::env::remove_var(ENV_K0MARU_RECEIPT_DIR);
-    let default_store = ReceiptStore::default();
-    assert_eq!(default_store.base_dir(), resolve_receipts_dir(None));
-    assert_eq!(ReceiptStore::default_dir(), resolve_receipts_dir(None));
+fn test_receipt_skipped_status_validation_and_is_passing() {
+    let mut receipt = create_valid_receipt("task_skipped_01");
+
+    // Set all checks to "skipped" (case-insensitive)
+    receipt.checks.compilation.status = "skipped".to_string();
+    receipt.checks.tests.status = "SKIPPED".to_string();
+    receipt.checks.tests.total = 0;
+    receipt.checks.tests.failed = 0;
+    receipt.checks.linter.status = "Skipped".to_string();
+    receipt.checks.scope_guard.status = "skipped".to_string();
+
+    assert!(receipt.validate().is_ok());
+    assert!(receipt.checks.compilation.is_skipped());
+    assert!(receipt.checks.tests.is_skipped());
+    assert!(receipt.checks.linter.is_skipped());
+    assert!(receipt.checks.scope_guard.is_skipped());
+
+    assert!(receipt.checks.compilation.is_passed());
+    assert!(receipt.checks.tests.is_passed());
+    assert!(receipt.checks.linter.is_passed());
+    assert!(receipt.checks.scope_guard.is_passed());
+    assert!(receipt.checks.is_all_passed());
+
+    // When verdict is Success and checks are skipped/passed, receipt is passing
+    assert!(receipt.is_passing());
+
+    // Rejection of invalid status (not passed, failed, or skipped)
+    let invalid_statuses = ["unknown", "ignored", "canceled", "pending", "aborted"];
+    for bad in invalid_statuses {
+        let mut r_bad = receipt.clone();
+        r_bad.checks.compilation.status = bad.to_string();
+        let err = r_bad.validate().unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Expected 'passed', 'failed', or 'skipped'"),
+            "Expected error message to mention skipped for status: {bad}"
+        );
+    }
 }

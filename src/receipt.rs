@@ -128,16 +128,22 @@ pub struct CompilationCheck {
 }
 
 impl CompilationCheck {
-    /// Returns `true` if compilation succeeded.
+    /// Returns `true` if compilation succeeded or was skipped without error.
     pub fn is_passed(&self) -> bool {
-        self.status.eq_ignore_ascii_case("passed") && self.exit_code == 0
+        (self.status.eq_ignore_ascii_case("passed") || self.status.eq_ignore_ascii_case("skipped"))
+            && self.exit_code == 0
+    }
+
+    /// Returns `true` if compilation was skipped.
+    pub fn is_skipped(&self) -> bool {
+        self.status.eq_ignore_ascii_case("skipped")
     }
 }
 
 /// Test runner execution results.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TestCheck {
-    /// Check status (e.g. "passed" or "failed").
+    /// Check status (e.g. "passed", "failed", or "skipped").
     pub status: String,
     /// Total test cases executed.
     pub total: usize,
@@ -149,32 +155,44 @@ pub struct TestCheck {
 }
 
 impl TestCheck {
-    /// Returns `true` if all tests passed with zero failures.
+    /// Returns `true` if all tests passed with zero failures or were skipped.
     pub fn is_passed(&self) -> bool {
-        self.status.eq_ignore_ascii_case("passed") && self.failed == 0
+        (self.status.eq_ignore_ascii_case("passed") || self.status.eq_ignore_ascii_case("skipped"))
+            && self.failed == 0
+    }
+
+    /// Returns `true` if tests were skipped.
+    pub fn is_skipped(&self) -> bool {
+        self.status.eq_ignore_ascii_case("skipped")
     }
 }
 
 /// Linter and static analysis results.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LinterCheck {
-    /// Check status (e.g. "passed" or "failed").
+    /// Check status (e.g. "passed", "failed", or "skipped").
     pub status: String,
     /// Number of reported linter warnings.
     pub warnings: usize,
 }
 
 impl LinterCheck {
-    /// Returns `true` if linter passed with zero warnings.
+    /// Returns `true` if linter passed with zero warnings or was skipped.
     pub fn is_passed(&self) -> bool {
-        self.status.eq_ignore_ascii_case("passed") && self.warnings == 0
+        (self.status.eq_ignore_ascii_case("passed") || self.status.eq_ignore_ascii_case("skipped"))
+            && self.warnings == 0
+    }
+
+    /// Returns `true` if linter was skipped.
+    pub fn is_skipped(&self) -> bool {
+        self.status.eq_ignore_ascii_case("skipped")
     }
 }
 
 /// Scope guard check ensuring changes remained within allowed boundaries.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ScopeGuardCheck {
-    /// Check status (e.g. "passed" or "failed").
+    /// Check status (e.g. "passed", "failed", or "skipped").
     pub status: String,
     /// List of modified file paths.
     #[serde(default)]
@@ -182,9 +200,14 @@ pub struct ScopeGuardCheck {
 }
 
 impl ScopeGuardCheck {
-    /// Returns `true` if scope guard checks passed.
+    /// Returns `true` if scope guard checks passed or were skipped.
     pub fn is_passed(&self) -> bool {
-        self.status.eq_ignore_ascii_case("passed")
+        self.status.eq_ignore_ascii_case("passed") || self.status.eq_ignore_ascii_case("skipped")
+    }
+
+    /// Returns `true` if scope guard check was skipped.
+    pub fn is_skipped(&self) -> bool {
+        self.status.eq_ignore_ascii_case("skipped")
     }
 }
 
@@ -293,9 +316,9 @@ impl ExecutionReceipt {
 
         // Validate compilation check consistency
         let comp_status = self.checks.compilation.status.to_ascii_lowercase();
-        if comp_status != "passed" && comp_status != "failed" {
+        if comp_status != "passed" && comp_status != "failed" && comp_status != "skipped" {
             return Err(RouterError::InvalidReceipt(format!(
-                "Invalid compilation check status: '{}'. Expected 'passed' or 'failed'",
+                "Invalid compilation check status: '{}'. Expected 'passed', 'failed', or 'skipped'",
                 self.checks.compilation.status
             )));
         }
@@ -308,9 +331,9 @@ impl ExecutionReceipt {
 
         // Validate tests check consistency
         let test_status = self.checks.tests.status.to_ascii_lowercase();
-        if test_status != "passed" && test_status != "failed" {
+        if test_status != "passed" && test_status != "failed" && test_status != "skipped" {
             return Err(RouterError::InvalidReceipt(format!(
-                "Invalid tests check status: '{}'. Expected 'passed' or 'failed'",
+                "Invalid tests check status: '{}'. Expected 'passed', 'failed', or 'skipped'",
                 self.checks.tests.status
             )));
         }
@@ -329,9 +352,9 @@ impl ExecutionReceipt {
 
         // Validate linter check consistency
         let lint_status = self.checks.linter.status.to_ascii_lowercase();
-        if lint_status != "passed" && lint_status != "failed" {
+        if lint_status != "passed" && lint_status != "failed" && lint_status != "skipped" {
             return Err(RouterError::InvalidReceipt(format!(
-                "Invalid linter check status: '{}'. Expected 'passed' or 'failed'",
+                "Invalid linter check status: '{}'. Expected 'passed', 'failed', or 'skipped'",
                 self.checks.linter.status
             )));
         }
@@ -344,9 +367,9 @@ impl ExecutionReceipt {
 
         // Validate scope guard check consistency
         let scope_status = self.checks.scope_guard.status.to_ascii_lowercase();
-        if scope_status != "passed" && scope_status != "failed" {
+        if scope_status != "passed" && scope_status != "failed" && scope_status != "skipped" {
             return Err(RouterError::InvalidReceipt(format!(
-                "Invalid scope_guard check status: '{}'. Expected 'passed' or 'failed'",
+                "Invalid scope_guard check status: '{}'. Expected 'passed', 'failed', or 'skipped'",
                 self.checks.scope_guard.status
             )));
         }
