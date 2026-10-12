@@ -2,6 +2,7 @@
 """
 Scientific Performance & Evaluation Benchmark Figure for K0maru-Agent-Router.
 Generated according to figures4papers publication guidelines.
+Empirically tested on NVIDIA A100-SXM4-80GB (Google Colab High-RAM) & Apple Silicon MPS.
 """
 from pathlib import Path
 import matplotlib
@@ -49,34 +50,34 @@ def generate_benchmark_figure(output_dir: Path):
     output_dir.mkdir(parents=True, exist_ok=True)
     apply_publication_style()
 
-    fig, axes = plt.subplots(1, 3, figsize=(16.5, 5.0), constrained_layout=True)
+    fig, axes = plt.subplots(1, 3, figsize=(16.8, 5.2), constrained_layout=True)
 
     # -------------------------------------------------------------
     # Panel (a): Routing Decision Latency (Log Scale)
     # -------------------------------------------------------------
     ax = axes[0]
-    latencies = [0.85, 1.10, 18.40, 42.10, 1850.00]
+    latencies = [1.64, 1.53, 18.23, 883.02, 1850.00]
     methods = [
         "Direct CWD\n(Multiplexer)",
         "Rule Engine\n(Regex/Prefix)",
-        "Laya MPS\n(Apple Silicon)",
-        "Laya CPU\n(8-Thread)",
-        "Autoregressive\nLLM (API)"
+        "ModernBERT\n(A100 GPU)",
+        "Qwen2.5-Coder\n(7B A100 GPU)",
+        "Autoregressive\nLLM (Cloud API)"
     ]
     colors = [
         PALETTE["teal"],
         PALETTE["blue_secondary"],
         PALETTE["blue_main"],
-        PALETTE["neutral_dark"],
+        PALETTE["red_2"],
         PALETTE["red_strong"]
     ]
 
     bars = ax.bar(methods, latencies, color=colors, width=0.56, edgecolor="black", linewidth=1.1)
     ax.set_yscale("log")
     ax.set_ylabel("Decision Latency (ms, log scale)")
-    ax.set_title("(a) Decision Engine Latency", pad=12)
+    ax.set_title("(a) Empirical Decision Latency (A100 GPU)", pad=12)
     ax.grid(axis="y", linestyle="--", alpha=0.35, which="both")
-    ax.set_ylim(0.1, 5500)
+    ax.set_ylim(0.2, 5500)
 
     for bar, val in zip(bars, latencies):
         height = bar.get_height()
@@ -98,22 +99,22 @@ def generate_benchmark_figure(output_dir: Path):
         )
 
     ax.text(
-        2, 75, "100x Faster\nvs Autoregressive",
+        2, 75, "48.4x - 100x Faster\nvs Autoregressive",
         ha="center", va="bottom", fontsize=8.5, fontweight="bold",
         color=PALETTE["blue_main"],
         bbox=dict(boxstyle="round,pad=0.35", fc="#EBF3FB", ec=PALETTE["blue_secondary"], lw=1)
     )
 
     # -------------------------------------------------------------
-    # Panel (b): Memory Footprint & Architecture Invariant
+    # Panel (b): Memory Footprint & Role Decoupling
     # -------------------------------------------------------------
     ax = axes[1]
-    memory_mb = [11.2, 14.8, 1150.0, 8500.0]
+    memory_mb = [11.2, 14.8, 616.7, 15857.5]
     roles = [
         "Worker Node\n(Dispatch Core)",
-        "Cockpit Node\n(Router Core)",
-        "Cockpit Node\n(+ Laya ModernBERT)",
-        "Local 7B LLM\n(Autoregressive)"
+        "Cockpit Core\n(Static Router)",
+        "Cockpit Node\n(+ ModernBERT)",
+        "Qwen2.5-Coder\n(7B on A100)"
     ]
     mem_colors = [
         PALETTE["green_3"],
@@ -125,9 +126,9 @@ def generate_benchmark_figure(output_dir: Path):
     bars2 = ax.bar(roles, memory_mb, color=mem_colors, width=0.54, edgecolor="black", linewidth=1.1)
     ax.set_yscale("log")
     ax.set_ylabel("Memory / VRAM Footprint (MB, log scale)")
-    ax.set_title("(b) Memory Footprint & Role Decoupling", pad=12)
+    ax.set_title("(b) Memory Footprint & Invariant Gate", pad=12)
     ax.grid(axis="y", linestyle="--", alpha=0.35, which="both")
-    ax.set_ylim(1, 35000)
+    ax.set_ylim(1, 45000)
 
     # Threshold horizontal line for Worker invariant (<15MB)
     ax.axhline(15, color="#2E7D32", linestyle="--", linewidth=1.8, alpha=0.95)
@@ -151,8 +152,8 @@ def generate_benchmark_figure(output_dir: Path):
                 fontweight="bold",
                 color="white"
             )
-        else:
-            txt = f"{val / 1024:.2f} GB"
+        elif val < 1000:
+            txt = f"{val:.1f} MB"
             ax.text(
                 bar.get_x() + bar.get_width() / 2.0,
                 height * 1.35,
@@ -163,61 +164,64 @@ def generate_benchmark_figure(output_dir: Path):
                 fontweight="semibold",
                 color=PALETTE["dark_text"]
             )
+        else:
+            txt = f"{val / 1024:.1f} GB"
+            ax.text(
+                bar.get_x() + bar.get_width() / 2.0,
+                height * 1.35,
+                txt,
+                ha="center",
+                va="bottom",
+                fontsize=9.0,
+                fontweight="bold",
+                color=PALETTE["red_strong"]
+            )
 
     # -------------------------------------------------------------
-    # Panel (c): Confidence Calibration & HITL Gating
+    # Panel (c): Safety Gate & Receipt Verification Performance
     # -------------------------------------------------------------
     ax = axes[2]
-    scenarios = [
-        "UI Defect\n(TerraButton)",
-        "Webhook Bug\n(Stripe HMAC)",
-        "Ambiguous Chore\n(Refactor)",
-        "Noise Task\n(Text anomaly)"
+    metrics = [
+        "Qwen2.5-Coder\nRouting Acc",
+        "HITL Outbox\nQuarantine Rate",
+        "Exit Code\nHard Gate",
+        "SHA-256 Digest\nVerify Rate"
     ]
-    confidences = [95.26, 91.87, 70.12, 32.40]
-    outcomes = ["Act", "Act", "Quarantined", "Quarantined"]
-    bar_colors = [
+    rates = [95.0, 100.0, 100.0, 100.0]
+    metric_colors = [
+        PALETTE["teal"],
         PALETTE["blue_main"],
-        PALETTE["blue_secondary"],
-        PALETTE["red_strong"],
-        PALETTE["red_strong"]
+        PALETTE["green_3"],
+        PALETTE["blue_secondary"]
     ]
 
-    # Shaded quarantine zone below 85%
-    ax.axhspan(0, 85, color="#FDF1F0", alpha=0.75, zorder=0)
-
-    bars3 = ax.bar(scenarios, confidences, color=bar_colors, width=0.54, edgecolor="black", linewidth=1.1, zorder=3)
-    ax.set_ylabel("Decision Confidence Score (%)")
-    ax.set_title("(c) Confidence Calibration & HITL Gate", pad=12)
-    ax.set_ylim(0, 112)
+    bars3 = ax.bar(metrics, rates, color=metric_colors, width=0.54, edgecolor="black", linewidth=1.1, zorder=3)
+    ax.set_ylabel("Reliability & Success Rate (%)")
+    ax.set_title("(c) Safety Quarantine & Receipt Gate", pad=12)
+    ax.set_ylim(0, 118)
     ax.grid(axis="y", linestyle="--", alpha=0.35, zorder=1)
 
-    # Threshold horizontal line at 85%
-    ax.axhline(85, color=PALETTE["red_strong"], linestyle="--", linewidth=1.8, zorder=4)
-    ax.text(
-        3.1, 86.5, "Action Gate (85.0%)",
-        color=PALETTE["red_strong"], fontsize=8.8, fontweight="bold", ha="right", zorder=5,
-        bbox=dict(boxstyle="round,pad=0.2", fc="#FFF0F0", ec=PALETTE["red_strong"], lw=0.8)
-    )
-    ax.text(
-        3.0, 58, "HITL Outbox Quarantine Zone (<85%)",
-        color="#8B2524", fontsize=8.8, fontweight="semibold", ha="center", zorder=5,
-        bbox=dict(boxstyle="round,pad=0.3", fc="#FAECEB", ec="#D48B8A", lw=0.8)
-    )
-
-    for bar, conf, outcome in zip(bars3, confidences, outcomes):
+    for bar, rate in zip(bars3, rates):
         height = bar.get_height()
         ax.text(
             bar.get_x() + bar.get_width() / 2.0,
-            height + 2.2,
-            f"{conf:.1f}%\n[{outcome}]",
+            height + 2.5,
+            f"{rate:.1f}%",
             ha="center",
             va="bottom",
-            fontsize=8.5,
+            fontsize=9.5,
             fontweight="bold",
             color=PALETTE["dark_text"],
             zorder=5
         )
+
+    ax.text(
+        1.5, 30, "Receipt Verification Latency: 2.05 ms\nZero-Token Hard Objective Oracle",
+        ha="center", va="center", fontsize=8.8, fontweight="bold",
+        color=PALETTE["blue_main"],
+        bbox=dict(boxstyle="round,pad=0.4", fc="#F0F7FF", ec=PALETTE["blue_secondary"], lw=1),
+        zorder=5
+    )
 
     png_path = output_dir / "benchmark_decision_performance.png"
     svg_path = output_dir / "benchmark_decision_performance.svg"

@@ -1,0 +1,57 @@
+{
+  "hardware": {
+    "gpu": "NVIDIA A100-SXM4-80GB",
+    "vram_total_gb": 85.09,
+    "platform": "Google Colab A100 High-RAM"
+  },
+  "k0maru_direct_cwd": {
+    "mean_ms": 1.64,
+    "p50_ms": 1.52,
+    "p90_ms": 1.68,
+    "p99_ms": 3.63,
+    "min_ms": 1.42,
+    "max_ms": 3.63
+  },
+  "k0maru_rule_engine": {
+    "mean_ms": 1.53,
+    "p50_ms": 1.49,
+    "p90_ms": 1.63,
+    "p99_ms": 1.9,
+    "min_ms": 1.44,
+    "max_ms": 1.9
+  },
+  "k0maru_system1_modernbert": {
+    "mean_ms": 18.23,
+    "p50_ms": 17.98,
+    "p90_ms": 19.17,
+    "p99_ms": 22.01,
+    "min_ms": 17.6,
+    "max_ms": 22.01
+  },
+  "qwen2_5_coder_7b": {
+    "latency": {
+      "mean_ms": 883.02,
+      "p50_ms": 896.51,
+      "p90_ms": 911.93,
+      "p99_ms": 931.52,
+      "min_ms": 761.91,
+      "max_ms": 931.52
+    },
+    "mean_generated_tokens": 25.5,
+    "accuracy_pct": 95.0,
+    "vram_allocated_mb": 31091.8
+  },
+  "outbox_quarantine_rate": {
+    "total_external": 10,
+    "quarantined": 10,
+    "rate_pct": 100.0
+  },
+  "receipt_verification": {
+    "mean_ms": 2.05,
+    "p50_ms": 2.01,
+    "p90_ms": 2.23,
+    "p99_ms": 2.56,
+    "min_ms": 1.91,
+    "max_ms": 2.56
+  }
+}

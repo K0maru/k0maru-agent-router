@@ -14,6 +14,9 @@ Autonomous cross-repository task routing, defect dispatch, and HITL quarantine f
 - **Architectural Anti-Corruption**: Subagents are strictly restricted from mutating external repositories or dependencies directly within consumer codebases.
 - **HITL Outbox Gate**: Third-party external open-source dependencies (e.g. GitHub OSS) are quarantined into reproducible Minimum Reproducible Example (MRE) drafts under `.scratch/staged/` requiring explicit human sign-off before any outbound dispatch.
 - **Physical Zero-Cognitive-Load Addressing**: Discovers and addresses live agent panes strictly via canonical directory path matching (CWD / Git root) in **Herdr** and **Tmux** without requiring human-managed pane names or IDs.
+- **Master-Worker Signal Ingest Bus (`agent-signal-v1`)**: Eliminates the manual "reading terminal TTY" bottleneck. Worker agents emit single-shot task completion, failure, or progress signals (`k0maru-router signal`) to a centralized, configurable filesystem bus (`~/.k0maru/signals`).
+- **Zero-Daemon Status Inspector**: Inspects all active workspaces, git branches, dirty file counts, latest worker signals, and execution receipts in **sub-30ms** (`k0maru-router orchestrator status`) with clean ASCII tables or machine-readable JSON.
+- **Deterministic Execution Receipts (`agent-receipt-v1`)**: Closes the loop on task execution by ingesting, validating, and cryptographically verifying downstream patch SHA-256 integrity, compilation, test counts, linter warnings, and boundary scope guards with support for `skipped` and `passed` checks.
 - **Dual Exposure (CLI & MCP)**: Operates both as a high-performance native CLI tool (`k0maru-router`) and as a Model Context Protocol (MCP) server for Antigravity, Claude Code, and other AI agents.
 
 ---
@@ -44,7 +47,7 @@ Empirically verified on macOS Apple Silicon (MPS):
 - **Strict Role Decoupling**: Worker nodes operate under an immutable **<15 MB Zero-Model Invariant**; heavy models are strictly optional and isolated to the Cockpit control plane.
 - **Calibrated 85% Confidence Gate**: High-affinity defects (≥85%) dispatch autonomously; ambiguous chores (<85%) are safely quarantined into the HITL Outbox for human review.
 
-*(For detailed methodology, boundary analysis, and reproduction steps, see the full [Empirical Benchmark Report](docs/BENCHMARK_REPORT.md).)*
+*(For detailed methodology, benchmark data, and horizontal competitive analysis, see the [Empirical Benchmark Report](docs/BENCHMARK_REPORT.md) and [Competitive Analysis & Advantage Report](docs/COMPETITIVE_ANALYSIS.md).)*
 
 ---
 
@@ -57,28 +60,44 @@ Empirically verified on macOS Apple Silicon (MPS):
 git clone https://github.com/K0maru/k0maru-agent-router.git
 cd k0maru-agent-router
 cargo build --release
+cargo install --path .
 
-# The compiled binary will be located at:
-./target/release/k0maru-router
+# Binary installed to ~/.cargo/bin/k0maru-router
+k0maru-router --version
 ```
 
 ### 2. CLI Usage
 
 ```bash
-# Check system status, driver availability, and outbox metrics
+# 1. System Health & Multiplexer Driver Availability
 k0maru-router status
-
-# Probe active multiplexer sessions for a workspace directory
 k0maru-router probe --workspace /path/to/target-project
 
-# Route a TaskEnvelope JSON file
+# 2. Route Task Envelopes (Auto / Rule / Laya System-1)
 k0maru-router route --file task.json
+k0maru-router route --file task.json --dry-run
+k0maru-router route --file task.json --isolate
 
-# Manage staged external issue drafts
+# 3. HITL Outbox Management (External Quarantine Gate)
 k0maru-router outbox list
 k0maru-router outbox inspect --id <task_id>
 k0maru-router outbox approve --id <task_id>
 k0maru-router outbox reject --id <task_id>
+
+# 4. Master-Worker Signal Ingest Bus (Worker Completion Signaling)
+k0maru-router signal --task-id task_01 --status completed --summary "Bug fixed"
+k0maru-router signal --task-id task_02 --status failed --summary "Tests failed"
+k0maru-router signal --task-id task_03 --status in_progress --json
+
+# 5. Zero-Daemon Global Status Inspector (<30ms, All Workspaces)
+k0maru-router orchestrator status
+k0maru-router orchestrator status --json
+k0maru-router orchestrator status --workspaces /path/to/ws1,/path/to/ws2
+
+# 6. Cryptographic Execution Receipt Engine (agent-receipt-v1)
+k0maru-router receipt ingest --file /path/to/agent-receipt-v1.json
+k0maru-router receipt status <task_id>
+k0maru-router receipt list
 ```
 
 ### 3. MCP Server Configuration
@@ -89,19 +108,23 @@ Register `k0maru-router` in your agent MCP settings (e.g., `~/.gemini/config/mcp
 {
   "mcpServers": {
     "k0maru-router": {
-      "command": "/path/to/k0maru-agent-router/target/release/k0maru-router",
+      "command": "k0maru-router",
       "args": ["mcp"]
     }
   }
 }
 ```
 
-Available MCP Tools:
+Available MCP Tools (9 tools):
 - `route_task`: Ingests and routes a `TaskEnvelope` payload.
 - `probe_workspace`: Probes active sessions for a given workspace path.
 - `list_outbox`: Lists all staged external drafts in the quarantine area.
 - `approve_issue`: Approves an external staged issue for dispatch.
 - `reject_issue`: Rejects and archives an external staged issue.
+- `ingest_receipt`: Ingests an `agent-receipt-v1.json` execution receipt and validates check results and patch SHA-256 integrity.
+- `query_receipt`: Queries the receipt record and verification checks for a given task ID.
+- `emit_signal`: Emits a task execution completion, failure, or in-progress signal to the global signal bus (`~/.k0maru/signals`).
+- `orchestrator_status`: Probes git states, latest signals, and receipts across workspaces in <50ms without daemon.
 
 ---
 
@@ -140,7 +163,7 @@ Available MCP Tools:
 ## 🧪 Testing & Verification
 
 ```bash
-# Run comprehensive test suite (350+ tests covering protocol, drivers, outbox, and MCP)
+# Run comprehensive test suite (128 high-signal tests across 11 consolidated binaries)
 cargo test
 
 # Zero-warning lint check
