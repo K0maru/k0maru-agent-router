@@ -43,10 +43,6 @@ impl Cli {
                 ReceiptAction::Status(args) => args.json,
                 ReceiptAction::List(args) => args.json,
             },
-            Commands::ListStaged(args) => args.json,
-            Commands::InspectStaged(_) => false,
-            Commands::Approve(args) => args.json,
-            Commands::Reject(args) => args.json,
             Commands::Mcp(_) => false,
         }
     }
@@ -71,23 +67,6 @@ enum Commands {
 
     /// Ingest, inspect, and verify agent execution receipts
     Receipt(ReceiptCommand),
-
-    // --- Ergonomic Top-Level Aliases ---
-    /// List staged issues awaiting human review (alias for 'outbox list')
-    #[command(name = "list-staged")]
-    ListStaged(OutboxListArgs),
-
-    /// Inspect a staged issue draft (alias for 'outbox inspect')
-    #[command(name = "inspect-staged")]
-    InspectStaged(OutboxInspectArgs),
-
-    /// Approve a staged issue draft for outbound dispatch (alias for 'outbox approve')
-    #[command(name = "approve")]
-    Approve(OutboxApproveArgs),
-
-    /// Reject a staged issue draft (alias for 'outbox reject')
-    #[command(name = "reject")]
-    Reject(OutboxRejectArgs),
 }
 
 #[derive(Args, Debug, Clone)]
@@ -887,10 +866,6 @@ fn run(cli: Cli) -> Result<(), RouterError> {
             OutboxAction::Reject(args) => handle_outbox_reject(args),
         },
         Commands::Receipt(cmd) => handle_receipt(cmd),
-        Commands::ListStaged(args) => handle_outbox_list(args),
-        Commands::InspectStaged(args) => handle_outbox_inspect(args),
-        Commands::Approve(args) => handle_outbox_approve(args),
-        Commands::Reject(args) => handle_outbox_reject(args),
     }
 }
 

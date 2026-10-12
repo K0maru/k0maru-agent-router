@@ -276,3 +276,88 @@ fn tier2_envelope_invalid_timestamp_detection() {
         );
     }
 }
+
+#[test]
+fn tier2_envelope_validation_rejects_empty_and_whitespace_fields() {
+    let mut envelope = common::sample_internal_envelope();
+
+    // Whitespace schema
+    envelope.schema = Some("   ".to_string());
+    assert!(envelope.validate().is_err());
+    envelope.schema = None;
+
+    // Whitespace pane_id
+    envelope.caller.pane_id = Some(" \t ".to_string());
+    assert!(envelope.validate().is_err());
+    envelope.caller.pane_id = None;
+
+    // Internal target with None workspace
+    envelope.target.workspace = None;
+    envelope.target.is_external = false;
+    assert!(envelope.validate().is_err());
+    envelope.target.workspace = Some("/valid/path".to_string());
+
+    // Whitespace external workspace
+    envelope.target.is_external = true;
+    envelope.target.workspace = Some("   ".to_string());
+    assert!(envelope.validate().is_err());
+}
+
+#[test]
+fn tier2_envelope_validation_severities() {
+    let valid_severities = [
+        "blocking", "BLOCKING", "critical", "CRITICAL", "high", "HIGH", "medium", "normal", "low",
+    ];
+    let invalid_severities = ["urgent", "fatal", "p0", "p1", "minor", "major", "unknown"];
+
+    let mut envelope = common::sample_internal_envelope();
+    for sev in valid_severities {
+        envelope.payload.severity = sev.to_string();
+        assert!(
+            envelope.validate().is_ok(),
+            "Expected valid severity: {sev}"
+        );
+    }
+
+    for bad in invalid_severities {
+        envelope.payload.severity = bad.to_string();
+        assert!(
+            envelope.validate().is_err(),
+            "Expected invalid severity: {bad}"
+        );
+    }
+}
+
+#[test]
+fn tier2_envelope_unknown_fields_gracefully_ignored() {
+    let json_with_unknown = r#"{
+        "$schema": "https://k0maru.dev/schemas/agent-task-v1.json",
+        "id": "task_unknown_01",
+        "created_at": "2026-10-11T18:30:00Z",
+        "caller": {
+            "workspace": "/Users/k0maru3/workspace/consumer-app",
+            "agent": "agy",
+            "pane_id": "%1",
+            "unknown_caller_field": "extra_data"
+        },
+        "target": {
+            "identifier": "Terra-UI",
+            "workspace": "/Users/k0maru3/workspace/terra-ui",
+            "is_external": false,
+            "extra_target_tag": 123
+        },
+        "intent": "bug_report",
+        "payload": {
+            "title": "TerraButton issue",
+            "severity": "normal",
+            "extra_payload_field": true
+        },
+        "extra_top_level": { "deep": [1, 2, 3] }
+    }"#;
+
+    let envelope = TaskEnvelope::from_json_str(json_with_unknown)
+        .expect("Deserialization with unknown fields must succeed");
+    assert_eq!(envelope.id, "task_unknown_01");
+    assert_eq!(envelope.caller.agent, "agy");
+    assert_eq!(envelope.target.identifier, "Terra-UI");
+}

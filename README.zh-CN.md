@@ -44,7 +44,7 @@
 - **物理权责彻底解耦**：执行节点（Worker）严格遵循 **<15MB 零模型不变量**（实测仅 11.2 MB）；模型仅作为控制面（Cockpit）可选组件，严禁污染执行端。
 - **校准置信度与 85% HITL 门禁**：高置信度任务（≥85%）全自动分发执行；模糊或歧义任务（<85%）坚决不盲发，自动拦截并落盘至出站暂存区（`.scratch/staged/`）等待人类签发。
 
-*(完整实验设计、场景测试与复现命令详见 [docs/BENCHMARK_REPORT.md](docs/BENCHMARK_REPORT.md)。)*
+*(完整实验设计与评测报告详见 [docs/BENCHMARK_REPORT.md](docs/BENCHMARK_REPORT.md)，竞品多维对比与核心优势分析详见 [docs/COMPETITIVE_ANALYSIS.md](docs/COMPETITIVE_ANALYSIS.md)。)*
 
 ---
 

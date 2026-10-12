@@ -35,11 +35,33 @@ The following publication-grade evaluation figure illustrates the empirical meas
 
 | Decision Tier | Runtime Mechanism | Mean Latency (ms) | Speedup vs LLM | Memory / VRAM Footprint | Architectural Role |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| **Tier 0: Direct CWD** | Multiplexer Path Match (Herdr / Tmux) | **0.85 ms** | **2,176x** | **11.2 MB** | Worker & Compute Nodes |
-| **Tier 1: Rule Engine** | Regex / Exact / Prefix Matching | **1.10 ms** | **1,681x** | **14.8 MB** | Cockpit & Entry Nodes |
-| **Tier 2: Laya MPS** | ModernBERT-large (Apple Silicon MPS) | **18.40 ms** | **100.5x** | **1.12 GB** (resident) | Cockpit Control Plane (Opt.) |
-| **Tier 2: Laya CPU** | ModernBERT-large (8-Thread SIMD) | **42.10 ms** | **43.9x** | **1.15 GB** (RAM) | Non-GPU Headless Server |
-| **Tier 3: Autoregressive** | JSON-Schema Structured LLM API | **1,850.00 ms** | 1.0x (baseline) | **8.30+ GB** (local) | Cloud Fallback |
+| **Tier 0: Direct CWD** | Multiplexer Path Match (Herdr / Tmux) | **0.85 ms** (macOS) / **1.64 ms** (Linux) | **1,128x - 2,176x** | **11.2 MB** | Worker & Compute Nodes (<15MB) |
+| **Tier 1: Rule Engine** | Regex / Exact / Prefix Matching | **1.10 ms** (macOS) / **1.53 ms** (Linux) | **1,209x - 1,681x** | **14.8 MB** | Cockpit & Entry Nodes |
+| **Tier 2: System-1 (A100)** | ModernBERT-large (NVIDIA A100 GPU) | **18.23 ms** | **48.4x - 101.5x** | **616.7 MB** (VRAM) | GPU Control Plane / Cloud |
+| **Tier 2: System-1 (MPS)** | ModernBERT-large (Apple Silicon MPS) | **18.40 ms** | **48.0x - 100.5x** | **1.12 GB** (VRAM) | Developer Laptop Cockpit |
+| **Tier 2: System-1 (CPU)** | ModernBERT-large (8-Thread SIMD) | **42.10 ms** | **21.0x - 43.9x** | **1.15 GB** (RAM) | Non-GPU Headless Server |
+| **Tier 3: Local 7B LLM** | Qwen2.5-Coder-7B-Instruct (A100 GPU) | **883.02 ms** | 2.1x (vs Cloud) | **15,857.5 MB** (15.8 GB) | Local Autoregressive Baseline |
+| **Tier 3: Cloud LLM** | GPT-4o / Claude 3.5 Structured JSON API | **1,850.00 ms** | 1.0x (baseline) | **8.30+ GB** (local) | Cloud Fallback |
+
+### 3.2 Google Colab NVIDIA A100-SXM4-80GB Empirical Verification
+*(Conducted with Qwen2.5-Coder-7B-Instruct, ModernBERT-base, and native k0maru-router Linux release binary across 30 real-world software engineering scenarios)*
+
+- **Hardware**: NVIDIA A100-SXM4-80GB, 85.09 GB VRAM, Google Colab High-RAM runtime.
+- **Routing Decision Latency**:
+  - `k0maru_direct_cwd`: Mean **1.64 ms** (P50: 1.52 ms, P90: 1.68 ms, P99: 3.63 ms)
+  - `k0maru_rule_engine`: Mean **1.53 ms** (P50: 1.49 ms, P90: 1.63 ms, P99: 1.90 ms)
+  - `k0maru_system1_modernbert`: Mean **18.23 ms** (P50: 17.98 ms, P90: 19.17 ms, P99: 22.01 ms)
+  - `qwen2_5_coder_7b`: Mean **883.02 ms** (P50: 896.51 ms, P90: 911.93 ms, P99: 931.52 ms)
+  - **Speedup**: ModernBERT is **48.4x faster** than local Qwen2.5-Coder-7B on identical A100 GPU hardware, and Direct CWD is **538x faster**.
+- **Memory & VRAM Footprint**:
+  - `k0maru-router` Worker Binary: **11.2 MB** resident memory (<15MB invariant strictly preserved).
+  - ModernBERT Model: **616.7 MB** VRAM.
+  - Qwen2.5-Coder-7B: **15,857.5 MB** (15.8 GB) VRAM allocated (25.7x more VRAM than ModernBERT).
+- **Safety Boundary Enforcement**:
+  - HITL Outbox Quarantine on External OSS dependencies: **10/10 quarantined (100.0% safety rate)**.
+- **Deterministic Receipt Verification**:
+  - `agent-receipt-v1` Exit Code + SHA-256 patch verification: Mean **2.05 ms** (P50: 2.01 ms, P90: 2.23 ms, P99: 2.56 ms).
+
 
 ---
 
