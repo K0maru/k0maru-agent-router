@@ -2,9 +2,14 @@
 
 use clap::{Args, Parser, Subcommand};
 use k0maru_router::coordinator::{RouteOutcome, RouterCoordinator};
+use k0maru_router::decision::{
+    CascadingDecisionEngine, DeterministicRuleEngine, LayaDecisionClient,
+};
 use k0maru_router::driver::{AnyDriver, HerdrDriver, MultiplexerDriver, TmuxDriver};
 use k0maru_router::envelope::TaskEnvelope;
 use k0maru_router::error::RouterError;
+use k0maru_router::memory::NoopMemoryHook;
+use serde::Deserialize;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -139,6 +144,22 @@ pub struct RouteArgs {
     #[arg(long, default_value = ".scratch/staged")]
     pub outbox_dir: PathBuf,
 
+    /// Optional path to a JSON rule file for deterministic decision routing
+    #[arg(long)]
+    pub rule_file: Option<PathBuf>,
+
+    /// Optional path to a JSON file containing candidate targets for decision routing
+    #[arg(long)]
+    pub candidates_file: Option<PathBuf>,
+
+    /// Optional Laya / ModernBERT decision server base URL (e.g. http://127.0.0.1:8000)
+    #[arg(long)]
+    pub laya_url: Option<String>,
+
+    /// Disable cognitive memory hook preloading
+    #[arg(long)]
+    pub no_memory: bool,
+
     /// Dry-run mode: verify policy and addressing without mutating multiplexer state or creating outbox drafts
     #[arg(long)]
     pub dry_run: bool,
@@ -166,6 +187,18 @@ pub struct McpArgs {
     /// Path to the staged outbox directory
     #[arg(long, default_value = ".scratch/staged")]
     pub outbox_dir: PathBuf,
+
+    /// Optional path to a JSON rule file for deterministic decision routing
+    #[arg(long)]
+    pub rule_file: Option<PathBuf>,
+
+    /// Optional Laya / ModernBERT decision server base URL (e.g. http://127.0.0.1:8000)
+    #[arg(long)]
+    pub laya_url: Option<String>,
+
+    /// Disable cognitive memory hook preloading
+    #[arg(long)]
+    pub no_memory: bool,
 }
 
 #[derive(Args, Debug, Clone)]
@@ -363,13 +396,92 @@ fn handle_probe(args: ProbeArgs) -> Result<(), RouterError> {
     Ok(())
 }
 
+fn configure_coordinator<D: MultiplexerDriver>(
+    mut coordinator: RouterCoordinator<D>,
+    rule_file: Option<&Path>,
+    laya_url: Option<&str>,
+    no_memory: bool,
+) -> Result<RouterCoordinator<D>, RouterError> {
+    let mut cascade = CascadingDecisionEngine::new();
+    let mut has_engine = false;
+
+    if let Some(path) = rule_file {
+        let rule_engine = DeterministicRuleEngine::from_file(path)?;
+        cascade = cascade.with_engine(rule_engine);
+        has_engine = true;
+    }
+
+    if let Some(url) = laya_url {
+        let laya_client = LayaDecisionClient::new().with_base_url(url);
+        cascade = cascade.with_engine(laya_client);
+        has_engine = true;
+    }
+
+    if has_engine {
+        coordinator = coordinator.with_decision_engine(cascade);
+    }
+
+    if no_memory {
+        coordinator = coordinator.with_memory_hook(NoopMemoryHook);
+    }
+
+    Ok(coordinator)
+}
+
+#[derive(Debug, Deserialize)]
+struct CandidateCliEntry {
+    #[serde(alias = "identifier")]
+    id: String,
+    #[serde(default)]
+    description: String,
+}
+
+fn load_candidates_file(path: &Path) -> Result<Vec<(String, String)>, RouterError> {
+    let content = std::fs::read_to_string(path)?;
+    if let Ok(vec) = serde_json::from_str::<Vec<CandidateCliEntry>>(&content) {
+        return Ok(vec.into_iter().map(|c| (c.id, c.description)).collect());
+    }
+    #[derive(Deserialize)]
+    struct Wrapper {
+        candidates: Vec<CandidateCliEntry>,
+    }
+    if let Ok(w) = serde_json::from_str::<Wrapper>(&content) {
+        return Ok(w
+            .candidates
+            .into_iter()
+            .map(|c| (c.id, c.description))
+            .collect());
+    }
+    Err(RouterError::InvalidEnvelope(format!(
+        "Failed to parse candidates file '{}'",
+        path.display()
+    )))
+}
+
 fn handle_route(args: RouteArgs) -> Result<(), RouterError> {
     let driver = resolve_driver(&args.driver)?;
-    let coordinator = RouterCoordinator::new(driver).with_outbox_dir(&args.outbox_dir);
+    let mut coordinator = RouterCoordinator::new(driver).with_outbox_dir(&args.outbox_dir);
+    coordinator = configure_coordinator(
+        coordinator,
+        args.rule_file.as_deref(),
+        args.laya_url.as_deref(),
+        args.no_memory,
+    )?;
     let file = args.resolved_file();
 
+    let candidate_entries = if let Some(ref cpath) = args.candidates_file {
+        load_candidates_file(cpath)?
+    } else {
+        Vec::new()
+    };
+    let candidates_slice: Vec<(&str, &str)> = candidate_entries
+        .iter()
+        .map(|(id, desc)| (id.as_str(), desc.as_str()))
+        .collect();
+
     let envelope = TaskEnvelope::from_file(file)?;
-    let outcome = coordinator.route_envelope(&envelope, args.dry_run)?;
+    let outcome =
+        coordinator.route_envelope_with_candidates(&envelope, &candidates_slice, args.dry_run)?;
 
     if args.json {
         let json = serde_json::to_string_pretty(&outcome)?;
@@ -522,7 +634,13 @@ fn handle_outbox_reject(args: OutboxRejectArgs) -> Result<(), RouterError> {
 
 fn handle_mcp(args: McpArgs) -> Result<(), RouterError> {
     let driver = resolve_driver(&args.driver)?;
-    let coordinator = RouterCoordinator::new(driver).with_outbox_dir(&args.outbox_dir);
+    let mut coordinator = RouterCoordinator::new(driver).with_outbox_dir(&args.outbox_dir);
+    coordinator = configure_coordinator(
+        coordinator,
+        args.rule_file.as_deref(),
+        args.laya_url.as_deref(),
+        args.no_memory,
+    )?;
     let server = k0maru_router::McpServer::new(coordinator);
     server.run_stdio().map_err(RouterError::Io)
 }

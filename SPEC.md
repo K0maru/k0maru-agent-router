@@ -89,25 +89,107 @@ pub trait MultiplexerDriver: Send + Sync {
 ```
 
 Implementations:
-- `HerdrDriver`: Interacts with Herdr daemon socket / CLI (`herdr agent list`, `herdr agent prompt`).
+- `HerdrDriver`: Interacts with Herdr daemon socket / CLI (`herdr agent list`, `herdr agent prompt` bracketed-paste).
 - `TmuxDriver`: Interacts with native tmux socket / CLI (`tmux list-panes -a -F ...`).
-- `SubprocessDriver`: Spawns standalone CLI agent in headless environments or CI.
+- `AnyDriver`: Dynamic auto-detecting wrapper choosing Herdr when available, falling back to Tmux.
 
 ---
 
-## 4. Phase Milestones & Delivery Plan
+## 4. Decision Engine SPI (Phase 3 Specification)
 
-- **Phase 1: Spec, Task Envelope & HITL Outbox Gate (Current)**:
-  - TaskEnvelope JSON validation & serialization.
-  - Boundary policy engine (Trusted vs Untrusted).
-  - Staged draft generator & human approval gate CLI (`stage`, `list-staged`, `approve`).
-  - Scaffolding & unit/integration test suite.
-- **Phase 2: Physical CWD Addressing & Multiplexer SPI**:
-  - CWD canonical normalization & live session matching.
-  - Herdr & Tmux driver implementations.
-  - Hot session wake up vs Cold spawn logic.
-- **Phase 3: Decision SPI & Memory Preload**:
-  - DeterministicRuleEngine, SemanticVectorEngine (ONNX).
-  - Hook to invoke `k0maru-agent-memory` for project blueprint preload.
+### Distributed Topology Node Specialization
+In a multi-node distributed harness (Cockpit, Compute, Storage, Edge), ambiguity exists **only at the ingress control plane**:
+- **Cockpit / Ingress Plane (Developer Laptop / CI Gateway)**: Directly interfaces with humans and external alert streams. May *optionally* mount a lightweight decision model (Laya / Jev) to resolve ambiguous bug reports among multiple candidate repositories.
+- **Worker / Compute / Edge Nodes (Linux GPU Boxes, Raspberry Pi, Jetson, CI Runners)**: Downstream nodes receive already-pinned, immutable `TaskEnvelope` contracts with explicit `target.workspace`. **Worker nodes strictly run in zero-model pure dispatch mode**, requiring zero Python/PyTorch/CUDA runtime dependencies and zero VRAM footprint (<15MB static memory).
+
+### Zero-Cost Invariant & Optionality
+A decision model is **never mandatory**. Over 90% of tasks have an explicit target and bypass the decision engine entirely (<1ms, $0 cost).
+- **`NoopDecisionEngine` (Default)**: Pure pass-through with zero overhead.
+- When an incoming task lacks an explicit target:
+  - If a decision engine is configured: it evaluates candidate targets.
+  - If no decision engine is configured: it safely quarantines the task to `.scratch/staged/` (HITL Outbox) for human confirmation, rather than guessing or crashing.
+
+```rust
+#[async_trait]
+pub trait DecisionEngine: Send + Sync {
+    /// Engine identifier name.
+    fn name(&self) -> &'static str;
+    
+    /// Availability and health probe.
+    async fn is_healthy(&self) -> bool;
+
+    /// Evaluates a TaskEnvelope against a list of candidate targets.
+    async fn evaluate_task(
+        &self,
+        envelope: &TaskEnvelope,
+        candidates: &[(&str, &str)], // (identifier, semantic_description)
+    ) -> Result<DecisionRoutingOutcome, RouterError>;
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct DecisionRoutingOutcome {
+    pub target_identifier: String,
+    pub confidence: f64,
+    pub engine_source: &'static str,
+    pub action_gate: String, // "act" | "escalate"
+    pub should_stage_outbox: bool,
+}
+```
+
+### Pluggable Engines:
+1. **`DeterministicRuleEngine`**:
+   - Exact string matching, globs, or regular expressions against envelope fields (`caller.workspace`, `payload.title`, etc.).
+   - Execution latency: ~1ms / $0 cost. Zero model dependencies.
+2. **`DecisionModelEngine` (System 1 & System 2, Optional)**:
+   - **Laya Client (`LayaDecisionClient`)**: Open-source non-autoregressive decision model (Convai Innovations, ModernBERT-large 421M). Single forward pass (32~50ms), zero hallucination, mathematically calibrated probabilities via RLCD. Uses `choice` primitive on `POST /v1/systemone`.
+   - **TypeSafe Jev Client (`JevClient`)**: Commercial cloud fallback consuming identical `POST /v1/systemone` wire protocol.
+   - **Structured LLM Client**: OpenAI-compatible chat completions fallback enforcing JSON Schema structured output for complex long-context reasoning.
+3. **`CascadingDecisionEngine`**:
+   - Cascading fallback: Local Laya ➔ Cloud Jev ➔ Structured LLM ➔ HITL Outbox Quarantine gate.
+
+---
+
+## 5. Cognitive Memory Hook SPI & Graceful Decoupling
+
+`k0maru-agent-router` strictly upholds the **Unix Modular Decoupling Invariant**:
+- The router is an independent, portable microkernel. It **MUST NOT** require `k0maru-agent-memory` to be installed or running to perform its core routing and dispatch duties.
+- Memory integration is an **optional cognitive enricher**.
+
+```rust
+pub trait MemoryHook: Send + Sync {
+    /// Name of the memory provider.
+    fn name(&self) -> &'static str;
+    
+    /// Whether the memory provider is currently available on the host system.
+    fn is_available(&self) -> bool;
+
+    /// Attempts to preload architectural context or blueprint for a given workspace.
+    /// Returns `Ok(Some(context))` if found, `Ok(None)` if unavailable or disabled.
+    fn preload_context(&self, workspace: &Path, project_name: &str) -> Result<Option<String>, RouterError>;
+}
+```
+
+### Graceful Degradation Rules:
+1. **`NoopMemoryHook` (Default)**: Used when memory integration is omitted or disabled (`--no-memory`). Returns `Ok(None)` with zero overhead.
+2. **`OptionalMemoryHook<H>`**: Wraps any memory hook implementation (e.g. `k0maru-memory` CLI / MCP).
+   - If the `k0maru` binary is missing (`NotFound`), the MCP server is unreachable, or a query times out:
+     - The hook logs a debug trace: `Memory hook skipped (provider unavailable)`.
+     - **It catches all errors and returns `Ok(None)`**, never failing or aborting the routing pipeline.
+   - If context is returned: the prompt injected into the target agent is transparently enriched with architectural invariants and project blueprints.
+
+---
+
+## 6. Phase Milestones & Delivery Plan
+
+- **Phase 1: Spec, Task Envelope & HITL Outbox Gate**: ✅ Completed (v0.1.0)
+- **Phase 2: Physical CWD Addressing & Multiplexer SPI**: ✅ Completed (v0.1.0, Herdr + Tmux)
+- **Phase 3: Decision SPI & Decoupled Memory Preload (Current)**:
+  - `DecisionEngine` trait & `CascadingDecisionEngine`.
+  - `LayaDecisionClient` (local ModernBERT / `laya-serve` `POST /v1/systemone`) and Jev cloud fallback.
+  - Decoupled `MemoryHook` trait with `NoopMemoryHook` fallback and non-blocking degradation.
+  - Real cross-repo defect dispatch and blueprint preload verification.
 - **Phase 4: Harness Synthesis & Autonomous Loop**:
-  - End-to-end integration with K0maru-Harness ecosystem.
+  - Integration into full K0maru-Harness matrix with execution receipts.
+- **Phase 5: Distributed Federation & Heterogeneous Hardware**:
+  - Remote SSH driver over Tailscale, GPU compilation servers, and edge hardware bus integration.
+

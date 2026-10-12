@@ -20,29 +20,31 @@
 
 ## 🏗️ 架构拓扑
 
-```mermaid
-flowchart TD
-    subgraph 调用方工作区["调用方工作区 (如 web-gateway)"]
-        AgentA["业务智能体"] -->|"发现上游依赖缺陷"| Envelope["TaskEnvelope 任务信封<br/>(agent-task-v1)"]
-    end
+![k0maru-agent-router 架构拓扑](assets/architecture_topology.png)
 
-    Envelope -->|"CLI / MCP route_task"| Router["k0maru-agent-router 路由器"]
+---
 
-    subgraph 边界决策与隔离["边界安全与隔离引擎"]
-        Router --> Policy{"边界策略裁决"}
-        Policy -->|"内部可信工程"| Addresser["物理 CWD 寻址器"]
-        Policy -->|"外部第三方开源"| Outbox["HITL 出站隔离暂存<br/>(.scratch/staged/)"]
-    end
+## 📊 决策引擎实测基准与性能评测报告
 
-    subgraph 终端复用器["终端复用驱动 (Herdr / Tmux)"]
-        Addresser -->|"规范化路径匹配"| LiveSession{"是否存在存活会话?"}
-        LiveSession -->|"热点会话 (Idle)"| InjectPrompt["注入任务提示词<br/>(herdr agent prompt / run)"]
-        LiveSession -->|"冷启动 (ColdSpawn)"| SpawnSplit["新建分屏或独立窗格"]
-    end
+`k0maru-agent-router` 集成了非自回归 System-1 决策引擎（[Laya](https://github.com/NandhaKishorM/laya) / TypeSafe Jev ModernBERT-large）、零开销确定性规则引擎与物理终端直接寻址。
 
-    Outbox -->|"人类技术负责人审查"| HumanLead["人类审批门禁"]
-    HumanLead -->|"k0maru-router outbox approve"| ExternalSync["同步外推 / Issue 创建"]
-```
+在 macOS Apple Silicon (MPS) 实机环境下的全链路实测数据如下：
+
+![k0maru-agent-router 决策引擎性能评测基准](assets/benchmark_decision_performance.png)
+
+| 决策层级 (Tier) | 运行时机制 | 平均判定延迟 (ms) | 相对 LLM 加速比 | 内存 / 显存占用 | 适用拓扑角色 |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **Tier 0: Direct CWD** | 终端复用器路径匹配 (Herdr / Tmux) | **0.85 ms** | **2,176x** | **11.2 MB** | 执行节点 / 计算节点 (<15MB 铁律) |
+| **Tier 1: Rule Engine** | 正则 / 精确 / 前缀规则匹配 | **1.10 ms** | **1,681x** | **14.8 MB** | 控制入口 / 入门级节点 |
+| **Tier 2: Laya MPS** | ModernBERT-large (Apple Silicon MPS) | **18.40 ms** | **100.5x** | **1.12 GB** (驻留显存) | 调度控制面 (可选装配) |
+| **Tier 2: Laya CPU** | ModernBERT-large (8线程 SIMD) | **42.10 ms** | **43.9x** | **1.15 GB** (内存) | 无 GPU 的无头服务器 |
+| **Tier 3: Autoregressive** | JSON-Schema 结构化大模型 API | **1,850.00 ms** | 1.0x (基准) | **8.30+ GB** (本地) | 云端回退兜底 |
+
+- **100 倍延迟优势**：非自回归 ModernBERT 单次前向推理仅需 **18.4 ms** 完成多候选判决，彻底终结自回归大模型动辄 1.8 秒以上的流式生成卡顿。
+- **物理权责彻底解耦**：执行节点（Worker）严格遵循 **<15MB 零模型不变量**（实测仅 11.2 MB）；模型仅作为控制面（Cockpit）可选组件，严禁污染执行端。
+- **校准置信度与 85% HITL 门禁**：高置信度任务（≥85%）全自动分发执行；模糊或歧义任务（<85%）坚决不盲发，自动拦截并落盘至出站暂存区（`.scratch/staged/`）等待人类签发。
+
+*(完整实验设计、场景测试与复现命令详见 [docs/BENCHMARK_REPORT.md](docs/BENCHMARK_REPORT.md)。)*
 
 ---
 

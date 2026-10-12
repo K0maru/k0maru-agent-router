@@ -20,8 +20,10 @@ This document establishes the ubiquitous language, architectural seams, and doma
 | **Boundary Policy** | `BoundaryPolicy` | Policy engine determining if a target repository is `Trusted` (internal/monorepo) or `Untrusted` (external OSS) | Never hardcode repos; evaluate via workspace config or git remote |
 | **Physical Address** | `PhysicalAddress` | Normalized filesystem canonical path (`CWD` / Git root) used to identify and target agents | Never rely on human-assigned pane or agent names |
 | **Session Handle** | `SessionHandle` | Multiplexer handle referencing either a `HotSession` (live idle/busy agent) or triggering `ColdSpawn` | Never assume a session is alive without probing driver |
-| **Multiplexer Driver** | `MultiplexerDriver` | SPI abstraction over terminal multiplexers (`HerdrDriver`, `TmuxDriver`, `SubprocessDriver`) | Never bake raw tmux / herdr commands into business logic |
-| **Decision Engine** | `DecisionEngine` | SPI abstraction for cascade routing decisions: `RuleEngine` (1ms), `VectorEngine` (15ms), or `ModelEngine` | Never block the fast path with heavy LLM calls |
+| **Multiplexer Driver** | `MultiplexerDriver` | SPI abstraction over terminal multiplexers (`HerdrDriver`, `TmuxDriver`, `AnyDriver`) | Never bake raw tmux / herdr commands into business logic |
+| **Decision Engine** | `DecisionEngine` | SPI abstraction for cascade routing decisions: `RuleEngine` (1ms), `LayaDecisionClient` (35ms System-1), or `StructuredLLM` | Never block the fast path with heavy LLM calls |
+| **Laya Model** | `LayaDecisionClient` | Open-source non-autoregressive System 1 decision model (ModernBERT 421M) consuming `POST /v1/systemone` | Never use autoregressive text generation where single forward pass suffices |
+| **Memory Hook** | `MemoryHook` | Optional cognitive enricher SPI querying `k0maru-memory` for project blueprints | Never hardcode a fatal dependency on memory hub; must degrade gracefully |
 | **Execution Receipt** | `ExecutionReceipt` | Structured delivery report returned by the target agent upon completing or rejecting a task | Never discard execution results silently |
 
 ---

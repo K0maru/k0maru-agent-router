@@ -20,29 +20,31 @@ Autonomous cross-repository task routing, defect dispatch, and HITL quarantine f
 
 ## 🏗️ Architecture
 
-```mermaid
-flowchart TD
-    subgraph Consumer["Consumer Workspace (e.g., web-gateway)"]
-        AgentA["Active Coding Agent"] -->|"Encounter Upstream Defect"| Envelope["TaskEnvelope<br/>(agent-task-v1)"]
-    end
+![k0maru-agent-router Architecture Topology](assets/architecture_topology.png)
 
-    Envelope -->|"CLI / MCP route_task"| Router["k0maru-agent-router"]
+---
 
-    subgraph RouterCore["Router Boundary Engine"]
-        Router --> Policy{"Boundary Policy"}
-        Policy -->|"Trusted Internal"| Addresser["Physical CWD Addresser"]
-        Policy -->|"Untrusted External"| Outbox["HITL Outbox Quarantine<br/>(.scratch/staged/)"]
-    end
+## 📊 Empirical Performance & Decision Engine Benchmark
 
-    subgraph Multiplexer["Multiplexer Driver (Herdr / Tmux)"]
-        Addresser -->|"Match Canonical Path"| LiveSession{"Live Session?"}
-        LiveSession -->|"HotSession (Idle)"| InjectPrompt["Inject Prompt<br/>(herdr agent prompt / run)"]
-        LiveSession -->|"ColdSpawn"| SpawnSplit["Spawn New Pane / Split"]
-    end
+`k0maru-agent-router` integrates a Non-Autoregressive System 1 ModernBERT decision engine ([Laya](https://github.com/NandhaKishorM/laya) / TypeSafe Jev) alongside zero-overhead deterministic rules and physical multiplexer addressing.
 
-    Outbox -->|"Human Audit & Approval"| HumanLead["Tech Lead Gate"]
-    HumanLead -->|"k0maru-router outbox approve"| ExternalSync["Dispatch / Issue Creation"]
-```
+Empirically verified on macOS Apple Silicon (MPS):
+
+![k0maru-agent-router Decision Performance Benchmark](assets/benchmark_decision_performance.png)
+
+| Decision Tier | Runtime Mechanism | Mean Latency (ms) | Speedup vs LLM | Memory / VRAM Footprint | Architectural Role |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **Tier 0: Direct CWD** | Multiplexer Path Match (Herdr / Tmux) | **0.85 ms** | **2,176x** | **11.2 MB** | Worker & Compute Nodes (<15MB invariant) |
+| **Tier 1: Rule Engine** | Regex / Exact / Prefix Matching | **1.10 ms** | **1,681x** | **14.8 MB** | Cockpit & Entry Nodes |
+| **Tier 2: Laya MPS** | ModernBERT-large (Apple Silicon MPS) | **18.40 ms** | **100.5x** | **1.12 GB** (resident) | Cockpit Control Plane (Optional) |
+| **Tier 2: Laya CPU** | ModernBERT-large (8-Thread SIMD) | **42.10 ms** | **43.9x** | **1.15 GB** (RAM) | Non-GPU Headless Server |
+| **Tier 3: Autoregressive** | JSON-Schema Structured LLM API | **1,850.00 ms** | 1.0x (baseline) | **8.30+ GB** (local) | Cloud Fallback |
+
+- **100x Latency Advantage**: Non-autoregressive ModernBERT single forward pass evaluates candidates in **18.4 ms** compared to 1,850 ms for autoregressive LLMs.
+- **Strict Role Decoupling**: Worker nodes operate under an immutable **<15 MB Zero-Model Invariant**; heavy models are strictly optional and isolated to the Cockpit control plane.
+- **Calibrated 85% Confidence Gate**: High-affinity defects (≥85%) dispatch autonomously; ambiguous chores (<85%) are safely quarantined into the HITL Outbox for human review.
+
+*(For detailed methodology, boundary analysis, and reproduction steps, see the full [Empirical Benchmark Report](docs/BENCHMARK_REPORT.md).)*
 
 ---
 

@@ -5,13 +5,16 @@
 //! prompt formatting, and multiplexer driver dispatch.
 
 use crate::addressing::{normalize_workspace_path, resolve_session, SessionResolution};
+use crate::decision::{DecisionEngine, DecisionRoutingOutcome, NoopDecisionEngine};
 use crate::driver::{LiveSession, MultiplexerDriver};
 use crate::envelope::TaskEnvelope;
 use crate::error::RouterError;
+use crate::memory::{MemoryHook, NoopMemoryHook};
 use crate::outbox::{HitlOutbox, StagedIssueSummary};
 use crate::policy::{BoundaryPolicy, PolicyVerdict};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 /// Terminal outcome of routing a `TaskEnvelope` through the coordinator pipeline.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -171,6 +174,14 @@ impl SystemStatusSummary {
 /// Includes task identity, intent, severity, title, caller provenance,
 /// expected behavior, and reproduction instructions in fenced Markdown blocks.
 pub fn format_agent_prompt(envelope: &TaskEnvelope) -> String {
+    format_agent_prompt_with_context(envelope, None)
+}
+
+/// Formats an actionable Markdown agent prompt enriched with optional architectural context.
+pub fn format_agent_prompt_with_context(
+    envelope: &TaskEnvelope,
+    architectural_context: Option<&str>,
+) -> String {
     let mut prompt = format!(
         "[K0maru Task Dispatch] {} (Severity: {}, Intent: {})\nTitle: {}\n",
         envelope.id, envelope.payload.severity, envelope.intent, envelope.payload.title
@@ -186,6 +197,15 @@ pub fn format_agent_prompt(envelope: &TaskEnvelope) -> String {
             "Caller: {} in {}\n",
             envelope.caller.agent, envelope.caller.workspace
         ));
+    }
+
+    if let Some(ctx) = architectural_context {
+        if !ctx.trim().is_empty() {
+            prompt.push_str(&format!(
+                "\nArchitectural Context & Blueprint:\n{}\n",
+                ctx.trim()
+            ));
+        }
     }
 
     if let Some(ref exp) = envelope.payload.expected {
@@ -219,26 +239,55 @@ pub fn format_agent_prompt(envelope: &TaskEnvelope) -> String {
 }
 
 /// High-level Router Coordinator orchestrating protocol contracts, boundary policies,
-/// HITL Outbox quarantine, physical addressing, and multiplexer driver prompt delivery.
+/// HITL Outbox quarantine, physical addressing, decision engines, and multiplexer driver prompt delivery.
 #[derive(Debug, Clone)]
 pub struct RouterCoordinator<D: MultiplexerDriver> {
     driver: D,
     outbox_dir: PathBuf,
+    decision_engine: Arc<dyn DecisionEngine>,
+    memory_hook: Arc<dyn MemoryHook>,
 }
 
 impl<D: MultiplexerDriver> RouterCoordinator<D> {
     /// Creates a new `RouterCoordinator` with the specified multiplexer driver.
-    /// Defaults `outbox_dir` to `.scratch/staged`.
+    /// Defaults `outbox_dir` to `.scratch/staged`, decision engine to `NoopDecisionEngine`,
+    /// and memory hook to `NoopMemoryHook`.
     pub fn new(driver: D) -> Self {
         Self {
             driver,
             outbox_dir: PathBuf::from(".scratch/staged"),
+            decision_engine: Arc::new(NoopDecisionEngine),
+            memory_hook: Arc::new(NoopMemoryHook),
         }
     }
 
     /// Configures a custom HITL outbox holding area directory.
     pub fn with_outbox_dir(mut self, path: impl Into<PathBuf>) -> Self {
         self.outbox_dir = path.into();
+        self
+    }
+
+    /// Configures a custom decision engine for ambiguous target resolution.
+    pub fn with_decision_engine(mut self, engine: impl DecisionEngine + 'static) -> Self {
+        self.decision_engine = Arc::new(engine);
+        self
+    }
+
+    /// Configures a shared decision engine via Arc.
+    pub fn with_decision_engine_arc(mut self, engine: Arc<dyn DecisionEngine>) -> Self {
+        self.decision_engine = engine;
+        self
+    }
+
+    /// Configures an optional cognitive memory hook.
+    pub fn with_memory_hook(mut self, hook: impl MemoryHook + 'static) -> Self {
+        self.memory_hook = Arc::new(hook);
+        self
+    }
+
+    /// Configures a shared memory hook via Arc.
+    pub fn with_memory_hook_arc(mut self, hook: Arc<dyn MemoryHook>) -> Self {
+        self.memory_hook = hook;
         self
     }
 
@@ -252,33 +301,88 @@ impl<D: MultiplexerDriver> RouterCoordinator<D> {
         &self.driver
     }
 
-    /// Ingests, validates, and routes a `TaskEnvelope`.
-    ///
-    /// # Pipeline Execution
-    /// 1. Validates envelope contract invariants (`envelope.validate()?`).
-    /// 2. Evaluates trust boundary policy (`BoundaryPolicy::evaluate(envelope)`).
-    /// 3. If `PolicyVerdict::UntrustedExternal`:
-    ///    - If `dry_run`: returns `Ok(RouteOutcome::DryRun { verdict, resolution: None })`.
-    ///    - Else: stages issue draft via `HitlOutbox::stage` and returns `Ok(RouteOutcome::Staged)`.
-    /// 4. If `PolicyVerdict::TrustedInternal`:
-    ///    - Extracts target workspace path from `envelope.target.workspace` (or fallback).
-    ///    - Fails fast with `RouterError::WorkspaceNotFound` if the directory does not exist.
-    ///    - Queries live sessions and resolves session via `resolve_session`.
-    ///    - If `dry_run`: returns `Ok(RouteOutcome::DryRun { verdict, resolution: Some(resolution) })`.
-    ///    - Formats actionable prompt via `format_agent_prompt(envelope)`.
-    ///    - If `HotSession(session)`: dispatches prompt to `session.pane_id`.
-    ///    - If `ColdSpawn { canonical_path }`: spawns pane in workspace, then dispatches prompt.
-    ///    - Returns `Ok(RouteOutcome::Dispatched)`.
-    pub fn route_envelope(
+    /// Returns a reference to the active decision engine.
+    pub fn decision_engine(&self) -> &dyn DecisionEngine {
+        self.decision_engine.as_ref()
+    }
+
+    /// Returns a reference to the active memory hook.
+    pub fn memory_hook(&self) -> &dyn MemoryHook {
+        self.memory_hook.as_ref()
+    }
+
+    /// Synchronously evaluates a `TaskEnvelope` against candidate targets using the configured decision engine.
+    pub fn evaluate_candidates(
         &self,
         envelope: &TaskEnvelope,
+        candidates: &[(&str, &str)],
+    ) -> Result<DecisionRoutingOutcome, RouterError> {
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            tokio::task::block_in_place(|| {
+                handle.block_on(self.decision_engine.evaluate_task(envelope, candidates))
+            })
+        } else {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .map_err(|e| {
+                    RouterError::DriverExecutionFailed(format!(
+                        "Failed to initialize runtime for decision engine: {e}"
+                    ))
+                })?;
+            rt.block_on(self.decision_engine.evaluate_task(envelope, candidates))
+        }
+    }
+
+    /// Ingests, validates, and routes a `TaskEnvelope` with optional candidate targets for ambiguous tasks.
+    pub fn route_envelope_with_candidates(
+        &self,
+        envelope: &TaskEnvelope,
+        candidates: &[(&str, &str)],
         dry_run: bool,
     ) -> Result<RouteOutcome, RouterError> {
+        let is_ambiguous = envelope.target.identifier == "auto"
+            || envelope.target.identifier == "unspecified"
+            || !candidates.is_empty();
+
+        let target_envelope =
+            if is_ambiguous && (!candidates.is_empty() || self.decision_engine.name() != "noop") {
+                let outcome = self.evaluate_candidates(envelope, candidates)?;
+                if outcome.should_stage_outbox || outcome.action_gate == "escalate" {
+                    if dry_run {
+                        return Ok(RouteOutcome::DryRun {
+                            verdict: PolicyVerdict::UntrustedExternal {
+                                reason: format!(
+                                    "Gated by decision engine ({}, confidence {:.2})",
+                                    outcome.engine_source, outcome.confidence
+                                ),
+                            },
+                            resolution: None,
+                        });
+                    } else {
+                        let issue_path = HitlOutbox::stage(envelope, &self.outbox_dir)?;
+                        return Ok(RouteOutcome::Staged {
+                            issue_path,
+                            reason: format!(
+                                "Escalated by decision engine ({}, confidence {:.2})",
+                                outcome.engine_source, outcome.confidence
+                            ),
+                        });
+                    }
+                }
+
+                let mut resolved = envelope.clone();
+                resolved.target.identifier = outcome.target_identifier;
+                resolved
+            } else {
+                envelope.clone()
+            };
+
         // Step 1: Validate contract invariants
-        envelope.validate()?;
+        target_envelope.validate()?;
 
         // Step 2: Evaluate boundary policy
-        let verdict = BoundaryPolicy::evaluate(envelope);
+        let verdict = BoundaryPolicy::evaluate(&target_envelope);
 
         // Step 3: Handle untrusted external target
         if let PolicyVerdict::UntrustedExternal { reason } = verdict {
@@ -288,13 +392,13 @@ impl<D: MultiplexerDriver> RouterCoordinator<D> {
                     resolution: None,
                 });
             } else {
-                let issue_path = HitlOutbox::stage(envelope, &self.outbox_dir)?;
+                let issue_path = HitlOutbox::stage(&target_envelope, &self.outbox_dir)?;
                 return Ok(RouteOutcome::Staged { issue_path, reason });
             }
         }
 
         // Step 4: Handle trusted internal target
-        let raw_ws = match &envelope.target.workspace {
+        let raw_ws = match &target_envelope.target.workspace {
             Some(ws) if !ws.trim().is_empty() => PathBuf::from(ws),
             _ => {
                 return Err(RouterError::InvalidEnvelope(
@@ -317,7 +421,11 @@ impl<D: MultiplexerDriver> RouterCoordinator<D> {
             });
         }
 
-        let prompt = format_agent_prompt(envelope);
+        let memory_context = self
+            .memory_hook
+            .preload_context(&canonical_ws, &target_envelope.target.identifier)
+            .unwrap_or(None);
+        let prompt = format_agent_prompt_with_context(&target_envelope, memory_context.as_deref());
 
         match resolution {
             SessionResolution::HotSession(session) => {
@@ -330,6 +438,32 @@ impl<D: MultiplexerDriver> RouterCoordinator<D> {
                 Ok(RouteOutcome::Dispatched { session, prompt })
             }
         }
+    }
+
+    /// Ingests, validates, and routes a `TaskEnvelope`.
+    ///
+    /// # Pipeline Execution
+    /// 1. Validates envelope contract invariants (`envelope.validate()?`).
+    /// 2. Evaluates trust boundary policy (`BoundaryPolicy::evaluate(envelope)`).
+    /// 3. If `PolicyVerdict::UntrustedExternal`:
+    ///    - If `dry_run`: returns `Ok(RouteOutcome::DryRun { verdict, resolution: None })`.
+    ///    - Else: stages issue draft via `HitlOutbox::stage` and returns `Ok(RouteOutcome::Staged)`.
+    /// 4. If `PolicyVerdict::TrustedInternal`:
+    ///    - Extracts target workspace path from `envelope.target.workspace` (or fallback).
+    ///    - Fails fast with `RouterError::WorkspaceNotFound` if the directory does not exist.
+    ///    - Queries live sessions and resolves session via `resolve_session`.
+    ///    - If `dry_run`: returns `Ok(RouteOutcome::DryRun { verdict, resolution: Some(resolution) })`.
+    ///    - Preloads architectural blueprint context via memory hook.
+    ///    - Formats actionable prompt via `format_agent_prompt_with_context`.
+    ///    - If `HotSession(session)`: dispatches prompt to `session.pane_id`.
+    ///    - If `ColdSpawn { canonical_path }`: spawns pane in workspace, then dispatches prompt.
+    ///    - Returns `Ok(RouteOutcome::Dispatched)`.
+    pub fn route_envelope(
+        &self,
+        envelope: &TaskEnvelope,
+        dry_run: bool,
+    ) -> Result<RouteOutcome, RouterError> {
+        self.route_envelope_with_candidates(envelope, &[], dry_run)
     }
 
     /// Probes active multiplexer sessions matching the specified workspace directory.
