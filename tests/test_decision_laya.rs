@@ -124,6 +124,41 @@ fn test_system_one_request_and_response_serde_contract() {
     );
 }
 
+#[test]
+fn test_native_laya_serve_response_deserialization() {
+    let native_laya_json = r#"{
+        "model": "laya-rl-agent",
+        "answers": {
+            "target": {
+                "type": "choice",
+                "choice": "/workspace/terra-ui",
+                "probabilities": {
+                    "/workspace/terra-ui": 0.9526,
+                    "/workspace/payment-backend": 0.0474
+                },
+                "confidence": 0.7248,
+                "answer_confidence": 0.9526,
+                "action": {
+                    "act_probability": 1.0
+                },
+                "x_jev_confidence": 0.9052
+            }
+        },
+        "usage": {
+            "input_tokens": 64,
+            "output_tokens": 0
+        }
+    }"#;
+
+    let response: SystemOneResponse = serde_json::from_str(native_laya_json).unwrap();
+    assert_eq!(response.selected_id, "/workspace/terra-ui");
+    assert!((response.confidence - 0.9526).abs() < 1e-4);
+    assert_eq!(response.action, "act");
+    assert_eq!(response.model.as_deref(), Some("laya-rl-agent"));
+    let probs = response.raw_probabilities.as_ref().unwrap();
+    assert!((probs.get("/workspace/terra-ui").unwrap() - 0.9526).abs() < 1e-4);
+}
+
 #[tokio::test]
 async fn test_laya_client_health_check() {
     let handler = Arc::new(|path: &str, _: &str| -> (u16, String) {
