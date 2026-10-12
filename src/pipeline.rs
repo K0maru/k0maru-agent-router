@@ -199,7 +199,7 @@ pub async fn execute_pipeline(config: &PipelineConfig) -> Result<PipelineRunRepo
         let t0 = std::time::Instant::now();
         if let Some(ws_bin) = probe_binary("k0maru-workspace") {
             let output = std::process::Command::new(&ws_bin)
-                .args(["provision", "--task-id", &config.task_id, "--repo-root"])
+                .args(["provision", "--task-id", &config.task_id, "--repo"])
                 .arg(&config.target_workspace)
                 .output();
             match output {
@@ -422,10 +422,11 @@ pub async fn execute_pipeline(config: &PipelineConfig) -> Result<PipelineRunRepo
             let output = std::process::Command::new(&ws_bin)
                 .args([
                     "teardown",
+                    "--task-id",
                     &config.task_id,
                     "--action",
                     "merge",
-                    "--repo-root",
+                    "--repo",
                 ])
                 .arg(&config.target_workspace)
                 .output();
