@@ -44,7 +44,7 @@ Empirically verified on macOS Apple Silicon (MPS):
 - **Strict Role Decoupling**: Worker nodes operate under an immutable **<15 MB Zero-Model Invariant**; heavy models are strictly optional and isolated to the Cockpit control plane.
 - **Calibrated 85% Confidence Gate**: High-affinity defects (≥85%) dispatch autonomously; ambiguous chores (<85%) are safely quarantined into the HITL Outbox for human review.
 
-*(For detailed methodology, boundary analysis, and reproduction steps, see the full [Empirical Benchmark Report](docs/BENCHMARK_REPORT.md).)*
+*(For detailed methodology, benchmark data, and horizontal competitive analysis, see the [Empirical Benchmark Report](docs/BENCHMARK_REPORT.md) and [Competitive Analysis & Advantage Report](docs/COMPETITIVE_ANALYSIS.md).)*
 
 ---
 
@@ -79,6 +79,10 @@ k0maru-router outbox list
 k0maru-router outbox inspect --id <task_id>
 k0maru-router outbox approve --id <task_id>
 k0maru-router outbox reject --id <task_id>
+
+# Ingest and query deterministic execution receipts (Phase 4)
+k0maru-router ingest-receipt --file /path/to/agent-receipt-v1.json
+k0maru-router query-receipt --task-id <task_id>
 ```
 
 ### 3. MCP Server Configuration
@@ -102,6 +106,8 @@ Available MCP Tools:
 - `list_outbox`: Lists all staged external drafts in the quarantine area.
 - `approve_issue`: Approves an external staged issue for dispatch.
 - `reject_issue`: Rejects and archives an external staged issue.
+- `ingest_receipt`: Ingests an `agent-receipt-v1.json` execution receipt and validates the git patch hash.
+- `query_receipt`: Queries the receipt record and status for a given task ID.
 
 ---
 
