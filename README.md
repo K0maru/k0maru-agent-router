@@ -81,8 +81,10 @@ k0maru-router outbox approve --id <task_id>
 k0maru-router outbox reject --id <task_id>
 
 # Ingest and query deterministic execution receipts (Phase 4)
-k0maru-router ingest-receipt --file /path/to/agent-receipt-v1.json
-k0maru-router query-receipt --task-id <task_id>
+k0maru-router receipt ingest --file /path/to/agent-receipt-v1.json
+k0maru-router receipt status --task-id <task_id>
+k0maru-router receipt list
+
 ```
 
 ### 3. MCP Server Configuration
