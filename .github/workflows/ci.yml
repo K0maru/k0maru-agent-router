@@ -65,5 +65,13 @@ jobs:
       - name: Rust Cache
         uses: Swatinem/rust-cache@v2
 
+      - name: Install dependencies (tmux)
+        run: |
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            which tmux || (sudo apt-get update && sudo apt-get install -y tmux)
+          elif [ "$RUNNER_OS" = "macOS" ]; then
+            which tmux || brew install tmux
+          fi
+
       - name: Run test suite
         run: cargo test --all-targets
