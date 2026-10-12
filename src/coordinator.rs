@@ -270,7 +270,7 @@ impl<D: MultiplexerDriver> RouterCoordinator<D> {
     /// Creates a new `RouterCoordinator` with the specified multiplexer driver.
     /// Defaults `outbox_dir` to `.scratch/staged`, decision engine to `NoopDecisionEngine`,
     /// memory hook to `NoopMemoryHook`, workspace provider to `InPlaceWorkspaceProvider`,
-    /// and receipt store to `.scratch/receipts`.
+    /// and receipt store to the default receipts directory (`$K0MARU_RECEIPT_DIR` or `~/.k0maru/receipts`).
     pub fn new(driver: D) -> Self {
         Self {
             driver,

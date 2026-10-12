@@ -5,8 +5,9 @@ use tempfile::tempdir;
 
 use k0maru_router::error::RouterError;
 use k0maru_router::receipt::{
-    CompilationCheck, ExecutionChecks, ExecutionReceipt, LinterCheck, ReceiptArtifacts,
-    ReceiptStore, ReceiptVerdict, ScopeGuardCheck, TestCheck, DEFAULT_RECEIPT_SCHEMA,
+    resolve_receipts_dir, CompilationCheck, ExecutionChecks, ExecutionReceipt, LinterCheck,
+    ReceiptArtifacts, ReceiptStore, ReceiptVerdict, ScopeGuardCheck, TestCheck, DEFAULT_K0MARU_DIR,
+    DEFAULT_RECEIPTS_DIR, DEFAULT_RECEIPT_SCHEMA, ENV_K0MARU_RECEIPT_DIR,
 };
 
 fn create_valid_receipt(task_id: &str) -> ExecutionReceipt {
@@ -279,4 +280,52 @@ fn test_receipt_store_lifecycle() {
     let after_delete = store.list().unwrap();
     assert_eq!(after_delete.len(), 1);
     assert_eq!(after_delete[0].task_id, "task_beta");
+}
+
+#[test]
+fn test_receipt_constants_contract() {
+    assert_eq!(ENV_K0MARU_RECEIPT_DIR, "K0MARU_RECEIPT_DIR");
+    assert_eq!(DEFAULT_K0MARU_DIR, ".k0maru");
+    assert_eq!(DEFAULT_RECEIPTS_DIR, "receipts");
+}
+
+#[test]
+fn test_resolve_receipts_dir_precedence() {
+    let tmp = tempdir().unwrap();
+    let override_dir = tmp.path().join("custom_override");
+    let env_dir = tmp.path().join("env_override");
+
+    // Priority 1: Explicit override wins regardless of env var
+    std::env::set_var(ENV_K0MARU_RECEIPT_DIR, env_dir.to_str().unwrap());
+    let resolved_p1 = resolve_receipts_dir(Some(&override_dir));
+    assert_eq!(resolved_p1, override_dir);
+
+    // Priority 2: Environment variable wins when override is None
+    let resolved_p2 = resolve_receipts_dir(None);
+    assert_eq!(resolved_p2, env_dir);
+
+    // Clean up env var
+    std::env::remove_var(ENV_K0MARU_RECEIPT_DIR);
+
+    // Priority 3: Fallback to home dir or current dir
+    let resolved_p3 = resolve_receipts_dir(None);
+    if let Some(home) = dirs::home_dir() {
+        assert_eq!(
+            resolved_p3,
+            home.join(DEFAULT_K0MARU_DIR).join(DEFAULT_RECEIPTS_DIR)
+        );
+    } else {
+        assert_eq!(
+            resolved_p3,
+            PathBuf::from(DEFAULT_K0MARU_DIR).join(DEFAULT_RECEIPTS_DIR)
+        );
+    }
+}
+
+#[test]
+fn test_receipt_store_default_uses_resolver() {
+    std::env::remove_var(ENV_K0MARU_RECEIPT_DIR);
+    let default_store = ReceiptStore::default();
+    assert_eq!(default_store.base_dir(), resolve_receipts_dir(None));
+    assert_eq!(ReceiptStore::default_dir(), resolve_receipts_dir(None));
 }

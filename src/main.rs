@@ -9,7 +9,7 @@ use k0maru_router::driver::{AnyDriver, HerdrDriver, MultiplexerDriver, TmuxDrive
 use k0maru_router::envelope::TaskEnvelope;
 use k0maru_router::error::RouterError;
 use k0maru_router::memory::NoopMemoryHook;
-use k0maru_router::receipt::ExecutionReceipt;
+use k0maru_router::receipt::{resolve_receipts_dir, ExecutionReceipt};
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -341,9 +341,9 @@ pub struct ReceiptIngestArgs {
     #[arg(long)]
     pub patch: Option<PathBuf>,
 
-    /// Path to receipts storage directory
-    #[arg(long, default_value = ".scratch/receipts")]
-    pub receipt_dir: PathBuf,
+    /// Path to receipts storage directory (defaults to $K0MARU_RECEIPT_DIR or ~/.k0maru/receipts)
+    #[arg(long)]
+    pub receipt_dir: Option<PathBuf>,
 
     /// Output result in machine-readable JSON format
     #[arg(long)]
@@ -365,9 +365,9 @@ pub struct ReceiptStatusArgs {
     #[arg(index = 1)]
     pub task_id: String,
 
-    /// Path to receipts storage directory
-    #[arg(long, default_value = ".scratch/receipts")]
-    pub receipt_dir: PathBuf,
+    /// Path to receipts storage directory (defaults to $K0MARU_RECEIPT_DIR or ~/.k0maru/receipts)
+    #[arg(long)]
+    pub receipt_dir: Option<PathBuf>,
 
     /// Output status in machine-readable JSON format
     #[arg(long)]
@@ -376,9 +376,9 @@ pub struct ReceiptStatusArgs {
 
 #[derive(Args, Debug, Clone)]
 pub struct ReceiptListArgs {
-    /// Path to receipts storage directory
-    #[arg(long, default_value = ".scratch/receipts")]
-    pub receipt_dir: PathBuf,
+    /// Path to receipts storage directory (defaults to $K0MARU_RECEIPT_DIR or ~/.k0maru/receipts)
+    #[arg(long)]
+    pub receipt_dir: Option<PathBuf>,
 
     /// Output listing in machine-readable JSON format
     #[arg(long)]
@@ -760,8 +760,9 @@ fn handle_receipt_ingest(args: ReceiptIngestArgs) -> Result<(), RouterError> {
         None
     };
 
+    let receipt_dir = resolve_receipts_dir(args.receipt_dir.as_deref());
     let driver = resolve_driver("auto")?;
-    let coordinator = RouterCoordinator::new(driver).with_receipt_dir(&args.receipt_dir);
+    let coordinator = RouterCoordinator::new(driver).with_receipt_dir(&receipt_dir);
     let summary = coordinator.ingest_receipt_with_patch(receipt, patch_bytes.as_deref())?;
 
     if args.json {
@@ -786,8 +787,9 @@ fn handle_receipt_ingest(args: ReceiptIngestArgs) -> Result<(), RouterError> {
 }
 
 fn handle_receipt_status(args: ReceiptStatusArgs) -> Result<(), RouterError> {
+    let receipt_dir = resolve_receipts_dir(args.receipt_dir.as_deref());
     let driver = resolve_driver("auto")?;
-    let coordinator = RouterCoordinator::new(driver).with_receipt_dir(&args.receipt_dir);
+    let coordinator = RouterCoordinator::new(driver).with_receipt_dir(&receipt_dir);
     let receipt = coordinator
         .get_receipt(&args.task_id)?
         .ok_or_else(|| RouterError::ReceiptNotFound(args.task_id.clone()))?;
@@ -816,8 +818,9 @@ fn handle_receipt_status(args: ReceiptStatusArgs) -> Result<(), RouterError> {
 }
 
 fn handle_receipt_list(args: ReceiptListArgs) -> Result<(), RouterError> {
+    let receipt_dir = resolve_receipts_dir(args.receipt_dir.as_deref());
     let driver = resolve_driver("auto")?;
-    let coordinator = RouterCoordinator::new(driver).with_receipt_dir(&args.receipt_dir);
+    let coordinator = RouterCoordinator::new(driver).with_receipt_dir(&receipt_dir);
     let receipts = coordinator.list_receipts()?;
 
     if args.json {
@@ -825,15 +828,12 @@ fn handle_receipt_list(args: ReceiptListArgs) -> Result<(), RouterError> {
         let json = serde_json::to_string_pretty(&summaries)?;
         println!("{json}");
     } else if receipts.is_empty() {
-        println!(
-            "No execution receipts found in {}.",
-            args.receipt_dir.display()
-        );
+        println!("No execution receipts found in {}.", receipt_dir.display());
     } else {
         println!(
             "EXECUTION RECEIPTS ({} total) in {}:",
             receipts.len(),
-            args.receipt_dir.display()
+            receipt_dir.display()
         );
         println!(
             "{:<20} {:<10} {:<10} WORKSPACE",

@@ -289,7 +289,7 @@ impl<D: MultiplexerDriver + Clone> McpServer<D> {
                         },
                         "receipt_dir": {
                             "type": "string",
-                            "description": "Optional path to receipts directory (defaults to .scratch/receipts)"
+                            "description": "Optional path to receipts directory (defaults to $K0MARU_RECEIPT_DIR or ~/.k0maru/receipts)"
                         },
                         "patch": {
                             "type": "string",
@@ -311,7 +311,7 @@ impl<D: MultiplexerDriver + Clone> McpServer<D> {
                         },
                         "receipt_dir": {
                             "type": "string",
-                            "description": "Optional path to receipts directory (defaults to .scratch/receipts)"
+                            "description": "Optional path to receipts directory (defaults to $K0MARU_RECEIPT_DIR or ~/.k0maru/receipts)"
                         }
                     },
                     "required": ["task_id"]

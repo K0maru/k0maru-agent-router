@@ -16,6 +16,39 @@ use crate::error::RouterError;
 /// Authoritative JSON Schema URI for execution receipts.
 pub const DEFAULT_RECEIPT_SCHEMA: &str = "https://k0maru.dev/schemas/agent-receipt-v1.json";
 
+/// Environment variable controlling global receipt bus storage location.
+pub const ENV_K0MARU_RECEIPT_DIR: &str = "K0MARU_RECEIPT_DIR";
+
+/// Default hidden root folder name under user's home directory.
+pub const DEFAULT_K0MARU_DIR: &str = ".k0maru";
+
+/// Default subfolder name for execution receipts storage.
+pub const DEFAULT_RECEIPTS_DIR: &str = "receipts";
+
+/// Resolves the canonical receipt storage directory based on standard precedence:
+/// 1. Priority 1: Explicit override path or CLI `--receipt-dir <PATH>` if supplied
+/// 2. Priority 2: Environment variable `K0MARU_RECEIPT_DIR`
+/// 3. Priority 3: Default home directory `dirs::home_dir().join(".k0maru").join("receipts")`
+///    (fallback to current dir `.k0maru/receipts` if home dir cannot be resolved)
+pub fn resolve_receipts_dir(override_path: Option<&Path>) -> PathBuf {
+    if let Some(path) = override_path {
+        return path.to_path_buf();
+    }
+
+    if let Ok(env_val) = std::env::var(ENV_K0MARU_RECEIPT_DIR) {
+        let trimmed = env_val.trim();
+        if !trimmed.is_empty() {
+            return PathBuf::from(trimmed);
+        }
+    }
+
+    if let Some(home) = dirs::home_dir() {
+        home.join(DEFAULT_K0MARU_DIR).join(DEFAULT_RECEIPTS_DIR)
+    } else {
+        PathBuf::from(DEFAULT_K0MARU_DIR).join(DEFAULT_RECEIPTS_DIR)
+    }
+}
+
 /// Verdict of downstream agent execution.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReceiptVerdict {
@@ -405,7 +438,7 @@ pub struct ReceiptStore {
 impl Default for ReceiptStore {
     fn default() -> Self {
         Self {
-            base_dir: PathBuf::from(".scratch/receipts"),
+            base_dir: resolve_receipts_dir(None),
         }
     }
 }
@@ -418,9 +451,9 @@ impl ReceiptStore {
         }
     }
 
-    /// Default directory path for receipts storage (`.scratch/receipts`).
+    /// Default directory path for receipts storage resolved via `resolve_receipts_dir(None)`.
     pub fn default_dir() -> PathBuf {
-        PathBuf::from(".scratch/receipts")
+        resolve_receipts_dir(None)
     }
 
     /// Returns the underlying base directory.
@@ -451,7 +484,7 @@ impl ReceiptStore {
         Ok(self.base_dir.join(format!("{clean_id}.json")))
     }
 
-    /// Validates and saves an execution receipt under `.scratch/receipts/<task_id>.json`.
+    /// Validates and saves an execution receipt under `<base_dir>/<task_id>.json`.
     pub fn save(&self, receipt: &ExecutionReceipt) -> Result<PathBuf, RouterError> {
         receipt.validate()?;
         fs::create_dir_all(&self.base_dir)?;

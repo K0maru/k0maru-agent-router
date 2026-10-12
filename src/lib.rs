@@ -41,9 +41,9 @@ pub use memory::{MemoryHook, NoopMemoryHook, OptionalMemoryHook};
 pub use outbox::{HitlOutbox, StagedIssueStatus, StagedIssueSummary, StagedStatus};
 pub use policy::{BoundaryPolicy, PolicyVerdict};
 pub use receipt::{
-    CompilationCheck, ExecutionChecks, ExecutionReceipt, LinterCheck, ReceiptArtifacts,
-    ReceiptStore, ReceiptSummary, ReceiptVerdict, ScopeGuardCheck, TestCheck,
-    DEFAULT_RECEIPT_SCHEMA,
+    resolve_receipts_dir, CompilationCheck, ExecutionChecks, ExecutionReceipt, LinterCheck,
+    ReceiptArtifacts, ReceiptStore, ReceiptSummary, ReceiptVerdict, ScopeGuardCheck, TestCheck,
+    DEFAULT_K0MARU_DIR, DEFAULT_RECEIPTS_DIR, DEFAULT_RECEIPT_SCHEMA, ENV_K0MARU_RECEIPT_DIR,
 };
 pub use workspace::{
     CliWorkspaceProvider, InPlaceWorkspaceProvider, OptionalWorkspaceProvider, WorkspaceProvider,

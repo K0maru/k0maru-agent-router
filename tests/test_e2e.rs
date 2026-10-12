@@ -547,6 +547,93 @@ fn test_cli_receipt_lifecycle() {
     assert_eq!(list_val[0]["task_id"], "task_receipt_01");
 }
 
+#[test]
+fn test_cli_receipt_lifecycle_with_env_var() {
+    let temp = tempdir().unwrap();
+    let env_receipts_dir = temp.path().join("env_receipts");
+    let cli_override_dir = temp.path().join("cli_override_receipts");
+    let receipt_file = temp.path().join("receipt_env.json");
+    let patch_file = temp.path().join("diff_env.patch");
+
+    let patch_bytes = b"index 789..abc\n+pub fn test_env_receipt() {}";
+    fs::write(&patch_file, patch_bytes).unwrap();
+
+    let receipt = create_sample_receipt(
+        "task_receipt_env_01",
+        &PathBuf::from("/workspaces/env_app"),
+        patch_bytes,
+    );
+    fs::write(
+        &receipt_file,
+        serde_json::to_string_pretty(&receipt).unwrap(),
+    )
+    .unwrap();
+
+    // 1. Ingest using K0MARU_RECEIPT_DIR env var (no --receipt-dir flag)
+    router_cmd()
+        .env("K0MARU_RECEIPT_DIR", env_receipts_dir.to_str().unwrap())
+        .args([
+            "receipt",
+            "ingest",
+            "--file",
+            receipt_file.to_str().unwrap(),
+            "--patch",
+            patch_file.to_str().unwrap(),
+            "--json",
+        ])
+        .assert()
+        .success()
+        .code(0);
+
+    // Verify it was stored in env_receipts_dir
+    assert!(env_receipts_dir.join("task_receipt_env_01.json").is_file());
+
+    // 2. Query status via env var
+    let assert = router_cmd()
+        .env("K0MARU_RECEIPT_DIR", env_receipts_dir.to_str().unwrap())
+        .args(["receipt", "status", "task_receipt_env_01", "--json"])
+        .assert()
+        .success()
+        .code(0);
+
+    let stdout = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
+    let val: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(val["task_id"], "task_receipt_env_01");
+    assert_eq!(val["verdict"], "success");
+
+    // 3. List via env var
+    let assert_list = router_cmd()
+        .env("K0MARU_RECEIPT_DIR", env_receipts_dir.to_str().unwrap())
+        .args(["receipt", "list", "--json"])
+        .assert()
+        .success()
+        .code(0);
+
+    let stdout_list = String::from_utf8(assert_list.get_output().stdout.clone()).unwrap();
+    let list_val: Vec<serde_json::Value> = serde_json::from_str(&stdout_list).unwrap();
+    assert_eq!(list_val.len(), 1);
+    assert_eq!(list_val[0]["task_id"], "task_receipt_env_01");
+
+    // 4. Priority 1 override: CLI --receipt-dir overrides K0MARU_RECEIPT_DIR
+    router_cmd()
+        .env("K0MARU_RECEIPT_DIR", env_receipts_dir.to_str().unwrap())
+        .args([
+            "receipt",
+            "ingest",
+            "--file",
+            receipt_file.to_str().unwrap(),
+            "--receipt-dir",
+            cli_override_dir.to_str().unwrap(),
+            "--json",
+        ])
+        .assert()
+        .success()
+        .code(0);
+
+    // Stored in cli_override_dir, not env_receipts_dir
+    assert!(cli_override_dir.join("task_receipt_env_01.json").is_file());
+}
+
 // ============================================================================
 // Suite 5: Error Handling & Exit Codes
 // ============================================================================
