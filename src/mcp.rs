@@ -317,6 +317,38 @@ impl<D: MultiplexerDriver + Clone> McpServer<D> {
                     "required": ["task_id"]
                 }
             }),
+            serde_json::json!({
+                "name": "emit_signal",
+                "description": "Emits a task execution completion, failure, or in-progress signal to the global signal bus (~/.k0maru/signals).",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "task_id": { "type": "string", "description": "Task identifier (e.g. task_router_orchestrator_bus_01)" },
+                        "status": { "type": "string", "description": "Status: completed, failed, or in_progress (default: completed)" },
+                        "summary": { "type": "string", "description": "Optional high-level summary or notes" },
+                        "agent_pane": { "type": "string", "description": "Optional agent pane identifier (defaults to $HERDR_PANE or $TMUX_PANE)" },
+                        "workspace": { "type": "string", "description": "Target workspace directory (default: .)" },
+                        "signal_dir": { "type": "string", "description": "Optional signals directory override" }
+                    },
+                    "required": ["task_id"]
+                }
+            }),
+            serde_json::json!({
+                "name": "orchestrator_status",
+                "description": "Inspects status of workspaces, git states, latest signals, and receipts across the matrix in <50ms without daemon.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "workspaces": {
+                            "type": "array",
+                            "items": { "type": "string" },
+                            "description": "Optional target workspaces (defaults to auto-discovery of k0maru-agent-*)"
+                        },
+                        "signal_dir": { "type": "string", "description": "Optional signals directory override" },
+                        "receipt_dir": { "type": "string", "description": "Optional receipts directory override" }
+                    }
+                }
+            }),
         ]
     }
 
@@ -455,6 +487,8 @@ impl<D: MultiplexerDriver + Clone> McpServer<D> {
             "reject_issue" => self.execute_reject_issue(arguments),
             "ingest_receipt" => self.execute_ingest_receipt(arguments),
             "query_receipt" => self.execute_query_receipt(arguments),
+            "emit_signal" => self.execute_emit_signal(arguments),
+            "orchestrator_status" => self.execute_orchestrator_status(arguments),
             unknown => McpToolCallResult::error(format!("Unknown tool: '{unknown}'")),
         }
     }
@@ -782,6 +816,97 @@ impl<D: MultiplexerDriver + Clone> McpServer<D> {
             }
             Ok(None) => McpToolCallResult::error(format!("Receipt not found for task '{task_id}'")),
             Err(e) => McpToolCallResult::error(format!("Query receipt error: {e}")),
+        }
+    }
+
+    /// Handles `emit_signal` tool invocation.
+    fn execute_emit_signal(&self, args: &serde_json::Value) -> McpToolCallResult {
+        let task_id = match args.get("task_id").and_then(|v| v.as_str()) {
+            Some(id) if !id.trim().is_empty() => id.to_string(),
+            _ => return McpToolCallResult::error("Missing or empty 'task_id' parameter"),
+        };
+
+        let status_str = args
+            .get("status")
+            .and_then(|v| v.as_str())
+            .unwrap_or("completed");
+        let status = match status_str.parse::<crate::signal::SignalStatus>() {
+            Ok(s) => s,
+            Err(e) => return McpToolCallResult::error(e),
+        };
+
+        let summary = args
+            .get("summary")
+            .and_then(|v| v.as_str())
+            .map(ToString::to_string);
+        let pane =
+            crate::signal::resolve_agent_pane(args.get("agent_pane").and_then(|v| v.as_str()));
+        let ws_str = args
+            .get("workspace")
+            .and_then(|v| v.as_str())
+            .unwrap_or(".");
+        let canonical_ws = std::fs::canonicalize(ws_str).unwrap_or_else(|_| PathBuf::from(ws_str));
+
+        let signal = crate::signal::TaskSignal {
+            schema: crate::signal::DEFAULT_SIGNAL_SCHEMA.to_string(),
+            task_id,
+            status,
+            summary,
+            agent_pane: pane,
+            workspace: canonical_ws,
+            timestamp: chrono::Utc::now().to_rfc3339(),
+        };
+
+        let coordinator = if let Some(dir) = args.get("signal_dir").and_then(|v| v.as_str()) {
+            self.coordinator.clone().with_signal_dir(PathBuf::from(dir))
+        } else {
+            self.coordinator.clone()
+        };
+
+        match coordinator.emit_signal(&signal) {
+            Ok(path) => {
+                let res = serde_json::json!({
+                    "status": "success",
+                    "file_path": path,
+                    "signal": signal,
+                });
+                McpToolCallResult::success(res)
+            }
+            Err(e) => McpToolCallResult::error(format!("Signal emit error: {e}")),
+        }
+    }
+
+    /// Handles `orchestrator_status` tool invocation.
+    fn execute_orchestrator_status(&self, args: &serde_json::Value) -> McpToolCallResult {
+        let mut coordinator = self.coordinator.clone();
+        if let Some(dir) = args.get("signal_dir").and_then(|v| v.as_str()) {
+            coordinator = coordinator.with_signal_dir(PathBuf::from(dir));
+        }
+        if let Some(dir) = args.get("receipt_dir").and_then(|v| v.as_str()) {
+            coordinator = coordinator.with_receipt_dir(PathBuf::from(dir));
+        }
+
+        let explicit_workspaces: Vec<PathBuf> = args
+            .get("workspaces")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|item| item.as_str())
+                    .map(PathBuf::from)
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        let workspaces = if !explicit_workspaces.is_empty() {
+            explicit_workspaces
+        } else {
+            crate::orchestrator::discover_default_workspaces(Some(coordinator.driver()))
+        };
+
+        let report = coordinator.orchestrator_report(&workspaces);
+        match serde_json::to_value(&report) {
+            Ok(val) => McpToolCallResult::success(val),
+            Err(e) => McpToolCallResult::error(format!("Serialization error: {e}")),
         }
     }
 

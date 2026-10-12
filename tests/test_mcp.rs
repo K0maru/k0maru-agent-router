@@ -65,7 +65,7 @@ fn test_mcp_tools_list_schema_contract() {
     let tools = resp["result"]["tools"]
         .as_array()
         .expect("tools must be array");
-    assert_eq!(tools.len(), 7, "Expected exactly 7 exposed MCP tools");
+    assert_eq!(tools.len(), 9, "Expected exactly 9 exposed MCP tools");
 
     let tool_names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
 
@@ -76,6 +76,8 @@ fn test_mcp_tools_list_schema_contract() {
     assert!(tool_names.contains(&"reject_issue"));
     assert!(tool_names.contains(&"ingest_receipt"));
     assert!(tool_names.contains(&"query_receipt"));
+    assert!(tool_names.contains(&"emit_signal"));
+    assert!(tool_names.contains(&"orchestrator_status"));
 
     for tool in tools {
         assert!(tool["description"].is_string());

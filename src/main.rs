@@ -9,7 +9,11 @@ use k0maru_router::driver::{AnyDriver, HerdrDriver, MultiplexerDriver, TmuxDrive
 use k0maru_router::envelope::TaskEnvelope;
 use k0maru_router::error::RouterError;
 use k0maru_router::memory::NoopMemoryHook;
+use k0maru_router::orchestrator::{discover_default_workspaces, format_ascii_table};
 use k0maru_router::receipt::{resolve_receipts_dir, ExecutionReceipt};
+use k0maru_router::signal::{
+    resolve_agent_pane, resolve_signals_dir, SignalStatus, TaskSignal, DEFAULT_SIGNAL_SCHEMA,
+};
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -43,6 +47,11 @@ impl Cli {
                 ReceiptAction::Status(args) => args.json,
                 ReceiptAction::List(args) => args.json,
             },
+            Commands::Signal(args) => args.json,
+            Commands::Orchestrator(cmd) => match &cmd.action {
+                Some(OrchestratorAction::Status(args)) => args.json,
+                None => cmd.args.json,
+            },
             Commands::Mcp(_) => false,
         }
     }
@@ -67,6 +76,12 @@ enum Commands {
 
     /// Ingest, inspect, and verify agent execution receipts
     Receipt(ReceiptCommand),
+
+    /// Emit task execution completion, failure, or in-progress signals
+    Signal(SignalArgs),
+
+    /// Inspect status of workspaces, git states, latest signals, and receipts
+    Orchestrator(OrchestratorCommand),
 }
 
 #[derive(Args, Debug, Clone)]
@@ -381,6 +396,75 @@ pub struct ReceiptListArgs {
     pub receipt_dir: Option<PathBuf>,
 
     /// Output listing in machine-readable JSON format
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct SignalArgs {
+    /// Task identifier (e.g. task_router_orchestrator_bus_01)
+    #[arg(long)]
+    pub task_id: String,
+
+    /// Task execution status ('completed', 'failed', 'in_progress')
+    #[arg(long, default_value = "completed")]
+    pub status: SignalStatus,
+
+    /// Optional summary or notes of task execution
+    #[arg(long)]
+    pub summary: Option<String>,
+
+    /// Path to signals storage directory (defaults to $K0MARU_SIGNAL_DIR or ~/.k0maru/signals)
+    #[arg(long)]
+    pub signal_dir: Option<PathBuf>,
+
+    /// Agent pane identifier (defaults to $HERDR_PANE or $TMUX_PANE)
+    #[arg(long)]
+    pub agent_pane: Option<String>,
+
+    /// Target workspace directory (defaults to current directory)
+    #[arg(long, default_value = ".")]
+    pub workspace: PathBuf,
+
+    /// Output emitted signal in machine-readable JSON format
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct OrchestratorCommand {
+    #[command(subcommand)]
+    pub action: Option<OrchestratorAction>,
+
+    #[command(flatten)]
+    pub args: OrchestratorStatusArgs,
+}
+
+#[derive(Subcommand, Debug, Clone)]
+pub enum OrchestratorAction {
+    /// Inspect status of workspaces, git states, latest signals, and receipts
+    Status(OrchestratorStatusArgs),
+}
+
+#[derive(Args, Debug, Clone, Default)]
+pub struct OrchestratorStatusArgs {
+    /// Target workspaces (comma-separated or multiple, defaulting to auto-discovery)
+    #[arg(short, long, value_delimiter = ',')]
+    pub workspaces: Vec<PathBuf>,
+
+    /// Path to signals storage directory (defaults to $K0MARU_SIGNAL_DIR or ~/.k0maru/signals)
+    #[arg(long)]
+    pub signal_dir: Option<PathBuf>,
+
+    /// Path to receipts storage directory (defaults to $K0MARU_RECEIPT_DIR or ~/.k0maru/receipts)
+    #[arg(long)]
+    pub receipt_dir: Option<PathBuf>,
+
+    /// Multiplexer driver to inspect (supported: tmux, herdr, auto)
+    #[arg(long, default_value = "auto")]
+    pub driver: String,
+
+    /// Output status in machine-readable JSON format
     #[arg(long)]
     pub json: bool,
 }
@@ -853,6 +937,75 @@ fn handle_receipt_list(args: ReceiptListArgs) -> Result<(), RouterError> {
     Ok(())
 }
 
+fn handle_signal(args: SignalArgs) -> Result<(), RouterError> {
+    let signal_dir = resolve_signals_dir(args.signal_dir.as_deref());
+    let pane = resolve_agent_pane(args.agent_pane.as_deref());
+    let canonical_ws =
+        std::fs::canonicalize(&args.workspace).unwrap_or_else(|_| args.workspace.clone());
+
+    let signal = TaskSignal {
+        schema: DEFAULT_SIGNAL_SCHEMA.to_string(),
+        task_id: args.task_id.clone(),
+        status: args.status,
+        summary: args.summary,
+        agent_pane: pane,
+        workspace: canonical_ws,
+        timestamp: chrono::Utc::now().to_rfc3339(),
+    };
+    signal.validate()?;
+
+    let driver = resolve_driver("auto")?;
+    let coordinator = RouterCoordinator::new(driver).with_signal_dir(&signal_dir);
+    let emitted_path = coordinator.emit_signal(&signal)?;
+
+    if args.json {
+        let json = serde_json::to_string_pretty(&signal)?;
+        println!("{json}");
+    } else {
+        println!("SIGNAL EMITTED for '{}':", signal.task_id);
+        println!("  Status:     {}", signal.status);
+        println!("  Workspace:  {}", signal.workspace.display());
+        if let Some(ref pane) = signal.agent_pane {
+            println!("  Agent Pane: {}", pane);
+        }
+        if let Some(ref sum) = signal.summary {
+            println!("  Summary:    {}", sum);
+        }
+        println!("  Timestamp:  {}", signal.timestamp);
+        println!("  Path:       {}", emitted_path.display());
+    }
+    Ok(())
+}
+
+fn handle_orchestrator(cmd: OrchestratorCommand) -> Result<(), RouterError> {
+    let args = match cmd.action {
+        Some(OrchestratorAction::Status(s)) => s,
+        None => cmd.args,
+    };
+    let signal_dir = resolve_signals_dir(args.signal_dir.as_deref());
+    let receipt_dir = resolve_receipts_dir(args.receipt_dir.as_deref());
+    let driver = resolve_driver(&args.driver)?;
+
+    let workspaces = if !args.workspaces.is_empty() {
+        args.workspaces
+    } else {
+        discover_default_workspaces(Some(&driver as &dyn MultiplexerDriver))
+    };
+
+    let coordinator = RouterCoordinator::new(driver)
+        .with_signal_dir(&signal_dir)
+        .with_receipt_dir(&receipt_dir);
+    let report = coordinator.orchestrator_report(&workspaces);
+
+    if args.json {
+        let json = serde_json::to_string_pretty(&report)?;
+        println!("{json}");
+    } else {
+        println!("{}", format_ascii_table(&report));
+    }
+    Ok(())
+}
+
 fn run(cli: Cli) -> Result<(), RouterError> {
     match cli.command {
         Commands::Status(args) => handle_status(args),
@@ -866,6 +1019,8 @@ fn run(cli: Cli) -> Result<(), RouterError> {
             OutboxAction::Reject(args) => handle_outbox_reject(args),
         },
         Commands::Receipt(cmd) => handle_receipt(cmd),
+        Commands::Signal(args) => handle_signal(args),
+        Commands::Orchestrator(cmd) => handle_orchestrator(cmd),
     }
 }
 
@@ -895,6 +1050,8 @@ fn main() -> ExitCode {
                     RouterError::DateTimeParse(_) => "DateTimeParse",
                     RouterError::InvalidReceipt(_) => "InvalidReceipt",
                     RouterError::ReceiptNotFound(_) => "ReceiptNotFound",
+                    RouterError::InvalidSignal(_) => "InvalidSignal",
+                    RouterError::SignalNotFound(_) => "SignalNotFound",
                     RouterError::WorkspaceError(_) => "WorkspaceError",
                 };
                 let json_err = serde_json::json!({

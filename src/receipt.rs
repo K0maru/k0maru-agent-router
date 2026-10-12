@@ -567,6 +567,20 @@ impl ReceiptStore {
         Ok(receipts)
     }
 
+    /// Returns the latest execution receipt matching the specified workspace directory.
+    pub fn latest_for_workspace(
+        &self,
+        workspace: &Path,
+    ) -> Result<Option<ExecutionReceipt>, RouterError> {
+        let receipts = self.list()?;
+        for receipt in receipts {
+            if crate::addressing::is_same_workspace(&receipt.workspace, workspace) {
+                return Ok(Some(receipt));
+            }
+        }
+        Ok(None)
+    }
+
     /// Deletes a stored execution receipt if present.
     pub fn delete(&self, task_id: &str) -> Result<bool, RouterError> {
         let target_path = self.resolve_path(task_id)?;

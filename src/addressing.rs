@@ -39,6 +39,51 @@ pub fn normalize_workspace_path(path: impl AsRef<Path>) -> Result<PathBuf, Route
     }
 }
 
+/// Compares two workspace paths to determine if they refer to the same physical directory,
+/// taking into account canonicalization, symlinks (e.g. `/var` vs `/private/var`),
+/// relative path resolution against CWD, and trailing slashes.
+pub fn is_same_workspace(p1: impl AsRef<Path>, p2: impl AsRef<Path>) -> bool {
+    let p1 = p1.as_ref();
+    let p2 = p2.as_ref();
+
+    if p1 == p2 {
+        return true;
+    }
+
+    if let (Ok(c1), Ok(c2)) = (std::fs::canonicalize(p1), std::fs::canonicalize(p2)) {
+        if c1 == c2 {
+            return true;
+        }
+    }
+
+    let s1 = p1.to_string_lossy().trim_end_matches('/').to_string();
+    let s2 = p2.to_string_lossy().trim_end_matches('/').to_string();
+    if s1 == s2 {
+        return true;
+    }
+
+    // Try resolving relative paths against current directory
+    if let Ok(cwd) = std::env::current_dir() {
+        let abs1 = if p1.is_relative() {
+            cwd.join(p1)
+        } else {
+            p1.to_path_buf()
+        };
+        let abs2 = if p2.is_relative() {
+            cwd.join(p2)
+        } else {
+            p2.to_path_buf()
+        };
+        if let (Ok(c1), Ok(c2)) = (std::fs::canonicalize(&abs1), std::fs::canonicalize(&abs2)) {
+            if c1 == c2 {
+                return true;
+            }
+        }
+    }
+
+    false
+}
+
 /// Resolution outcome when matching a target workspace against active multiplexer sessions.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum SessionResolution {

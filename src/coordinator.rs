@@ -10,9 +10,11 @@ use crate::driver::{LiveSession, MultiplexerDriver};
 use crate::envelope::TaskEnvelope;
 use crate::error::RouterError;
 use crate::memory::{MemoryHook, NoopMemoryHook};
+use crate::orchestrator::{collect_orchestrator_status, OrchestratorReport};
 use crate::outbox::{HitlOutbox, StagedIssueSummary};
 use crate::policy::{BoundaryPolicy, PolicyVerdict};
 use crate::receipt::{ExecutionReceipt, ReceiptStore, ReceiptSummary};
+use crate::signal::{SignalStore, TaskSignal};
 use crate::workspace::{InPlaceWorkspaceProvider, WorkspaceProvider};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -264,13 +266,15 @@ pub struct RouterCoordinator<D: MultiplexerDriver> {
     memory_hook: Arc<dyn MemoryHook>,
     workspace_provider: Arc<dyn WorkspaceProvider>,
     receipt_store: ReceiptStore,
+    signal_store: SignalStore,
 }
 
 impl<D: MultiplexerDriver> RouterCoordinator<D> {
     /// Creates a new `RouterCoordinator` with the specified multiplexer driver.
     /// Defaults `outbox_dir` to `.scratch/staged`, decision engine to `NoopDecisionEngine`,
     /// memory hook to `NoopMemoryHook`, workspace provider to `InPlaceWorkspaceProvider`,
-    /// and receipt store to the default receipts directory (`$K0MARU_RECEIPT_DIR` or `~/.k0maru/receipts`).
+    /// receipt store to the default receipts directory (`$K0MARU_RECEIPT_DIR` or `~/.k0maru/receipts`),
+    /// and signal store to the default signals directory (`$K0MARU_SIGNAL_DIR` or `~/.k0maru/signals`).
     pub fn new(driver: D) -> Self {
         Self {
             driver,
@@ -279,6 +283,7 @@ impl<D: MultiplexerDriver> RouterCoordinator<D> {
             memory_hook: Arc::new(NoopMemoryHook),
             workspace_provider: Arc::new(InPlaceWorkspaceProvider),
             receipt_store: ReceiptStore::default(),
+            signal_store: SignalStore::default(),
         }
     }
 
@@ -336,6 +341,18 @@ impl<D: MultiplexerDriver> RouterCoordinator<D> {
         self
     }
 
+    /// Configures a custom signal store.
+    pub fn with_signal_store(mut self, store: SignalStore) -> Self {
+        self.signal_store = store;
+        self
+    }
+
+    /// Configures a custom signals directory for the signal store.
+    pub fn with_signal_dir(mut self, path: impl Into<PathBuf>) -> Self {
+        self.signal_store = SignalStore::new(path);
+        self
+    }
+
     /// Returns a reference to the configured outbox directory.
     pub fn outbox_dir(&self) -> &Path {
         &self.outbox_dir
@@ -364,6 +381,11 @@ impl<D: MultiplexerDriver> RouterCoordinator<D> {
     /// Returns a reference to the active receipt store.
     pub fn receipt_store(&self) -> &ReceiptStore {
         &self.receipt_store
+    }
+
+    /// Returns a reference to the active signal store.
+    pub fn signal_store(&self) -> &SignalStore {
+        &self.signal_store
     }
 
     /// Helper to synchronously execute an async future on current or newly built runtime.
@@ -619,6 +641,26 @@ impl<D: MultiplexerDriver> RouterCoordinator<D> {
     /// Lists all stored execution receipts, sorted deterministically.
     pub fn list_receipts(&self) -> Result<Vec<ExecutionReceipt>, RouterError> {
         self.receipt_store.list()
+    }
+
+    /// Emits and persists a task execution signal.
+    pub fn emit_signal(&self, signal: &TaskSignal) -> Result<PathBuf, RouterError> {
+        self.signal_store.emit(signal)
+    }
+
+    /// Queries a stored task signal by task ID.
+    pub fn get_signal(&self, task_id: &str) -> Result<Option<TaskSignal>, RouterError> {
+        self.signal_store.get(task_id)
+    }
+
+    /// Lists all stored task signals, sorted by timestamp descending.
+    pub fn list_signals(&self) -> Result<Vec<TaskSignal>, RouterError> {
+        self.signal_store.list()
+    }
+
+    /// Generates an aggregated orchestrator status report across the specified workspaces.
+    pub fn orchestrator_report(&self, workspaces: &[PathBuf]) -> OrchestratorReport {
+        collect_orchestrator_status(workspaces, &self.signal_store, &self.receipt_store)
     }
 
     /// Probes active multiplexer sessions matching the specified workspace directory.
