@@ -12,10 +12,16 @@ pub mod mcp;
 pub mod memory;
 pub mod orchestrator;
 pub mod outbox;
+pub mod pipeline;
 pub mod policy;
 pub mod receipt;
 pub mod signal;
 pub mod workspace;
+
+pub use pipeline::{
+    execute_pipeline, probe_harness_components, HarnessComponentStatus, HarnessHealthReport,
+    PipelineConfig, PipelineRunReport, StageResult,
+};
 
 pub use addressing::{
     is_same_workspace, normalize_workspace_path, resolve_session, SessionResolution,
