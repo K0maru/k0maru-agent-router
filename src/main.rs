@@ -9,6 +9,7 @@ use k0maru_router::driver::{AnyDriver, HerdrDriver, MultiplexerDriver, TmuxDrive
 use k0maru_router::envelope::TaskEnvelope;
 use k0maru_router::error::RouterError;
 use k0maru_router::memory::NoopMemoryHook;
+use k0maru_router::receipt::ExecutionReceipt;
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -37,6 +38,11 @@ impl Cli {
                 OutboxAction::Approve(args) => args.json,
                 OutboxAction::Reject(args) => args.json,
             },
+            Commands::Receipt(cmd) => match &cmd.action {
+                ReceiptAction::Ingest(args) => args.json,
+                ReceiptAction::Status(args) => args.json,
+                ReceiptAction::List(args) => args.json,
+            },
             Commands::ListStaged(args) => args.json,
             Commands::InspectStaged(_) => false,
             Commands::Approve(args) => args.json,
@@ -62,6 +68,9 @@ enum Commands {
 
     /// Manage staged external issues in the HITL outbox holding area
     Outbox(OutboxCommand),
+
+    /// Ingest, inspect, and verify agent execution receipts
+    Receipt(ReceiptCommand),
 
     // --- Ergonomic Top-Level Aliases ---
     /// List staged issues awaiting human review (alias for 'outbox list')
@@ -159,6 +168,10 @@ pub struct RouteArgs {
     /// Disable cognitive memory hook preloading
     #[arg(long)]
     pub no_memory: bool,
+
+    /// Force task execution inside an isolated workspace sandbox
+    #[arg(long)]
+    pub isolate: bool,
 
     /// Dry-run mode: verify policy and addressing without mutating multiplexer state or creating outbox drafts
     #[arg(long)]
@@ -314,6 +327,83 @@ impl OutboxRejectArgs {
             .or(self.positional_id.as_deref())
             .unwrap_or("")
     }
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct ReceiptCommand {
+    #[command(subcommand)]
+    pub action: ReceiptAction,
+}
+
+#[derive(Subcommand, Debug, Clone)]
+pub enum ReceiptAction {
+    /// Ingest and validate an execution receipt JSON file
+    Ingest(ReceiptIngestArgs),
+
+    /// Query and inspect a stored execution receipt
+    Status(ReceiptStatusArgs),
+
+    /// List all stored execution receipts
+    List(ReceiptListArgs),
+}
+
+#[derive(Args, Debug, Clone)]
+#[command(group(clap::ArgGroup::new("receipt_file_group").required(true).args(["file", "positional_file"])))]
+pub struct ReceiptIngestArgs {
+    /// Path to execution receipt JSON file
+    #[arg(short, long)]
+    pub file: Option<PathBuf>,
+
+    /// Positional receipt file fallback
+    #[arg(index = 1)]
+    pub positional_file: Option<PathBuf>,
+
+    /// Path to optional patch file for SHA-256 integrity verification
+    #[arg(long)]
+    pub patch: Option<PathBuf>,
+
+    /// Path to receipts storage directory
+    #[arg(long, default_value = ".scratch/receipts")]
+    pub receipt_dir: PathBuf,
+
+    /// Output result in machine-readable JSON format
+    #[arg(long)]
+    pub json: bool,
+}
+
+impl ReceiptIngestArgs {
+    pub fn resolved_file(&self) -> &Path {
+        self.file
+            .as_deref()
+            .or(self.positional_file.as_deref())
+            .unwrap_or_else(|| Path::new(""))
+    }
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct ReceiptStatusArgs {
+    /// Task identifier to query receipt for
+    #[arg(index = 1)]
+    pub task_id: String,
+
+    /// Path to receipts storage directory
+    #[arg(long, default_value = ".scratch/receipts")]
+    pub receipt_dir: PathBuf,
+
+    /// Output status in machine-readable JSON format
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct ReceiptListArgs {
+    /// Path to receipts storage directory
+    #[arg(long, default_value = ".scratch/receipts")]
+    pub receipt_dir: PathBuf,
+
+    /// Output listing in machine-readable JSON format
+    #[arg(long)]
+    pub json: bool,
 }
 
 fn resolve_driver(name: &str) -> Result<AnyDriver, RouterError> {
@@ -481,7 +571,7 @@ fn handle_route(args: RouteArgs) -> Result<(), RouterError> {
 
     let envelope = TaskEnvelope::from_file(file)?;
     let outcome =
-        coordinator.route_envelope_with_candidates(&envelope, &candidates_slice, args.dry_run)?;
+        coordinator.route_task(&envelope, &candidates_slice, args.dry_run, args.isolate)?;
 
     if args.json {
         let json = serde_json::to_string_pretty(&outcome)?;
@@ -505,13 +595,24 @@ fn handle_route(args: RouteArgs) -> Result<(), RouterError> {
                     envelope.id
                 );
             }
-            RouteOutcome::Dispatched { session, .. } => {
-                println!(
-                    "[DISPATCHED] Task '{}' routed to pane {} in {}",
-                    envelope.id,
-                    session.pane_id,
-                    session.cwd.display()
-                );
+            RouteOutcome::Dispatched {
+                session, sandbox, ..
+            } => {
+                if let Some(ref sb) = sandbox {
+                    println!(
+                        "[DISPATCHED] Task '{}' routed to pane {} in isolated sandbox {}",
+                        envelope.id,
+                        session.pane_id,
+                        sb.display()
+                    );
+                } else {
+                    println!(
+                        "[DISPATCHED] Task '{}' routed to pane {} in {}",
+                        envelope.id,
+                        session.pane_id,
+                        session.cwd.display()
+                    );
+                }
                 println!("Prompt successfully delivered.");
             }
             RouteOutcome::DryRun {
@@ -645,6 +746,134 @@ fn handle_mcp(args: McpArgs) -> Result<(), RouterError> {
     server.run_stdio().map_err(RouterError::Io)
 }
 
+fn handle_receipt(cmd: ReceiptCommand) -> Result<(), RouterError> {
+    match cmd.action {
+        ReceiptAction::Ingest(args) => handle_receipt_ingest(args),
+        ReceiptAction::Status(args) => handle_receipt_status(args),
+        ReceiptAction::List(args) => handle_receipt_list(args),
+    }
+}
+
+fn handle_receipt_ingest(args: ReceiptIngestArgs) -> Result<(), RouterError> {
+    let file = args.resolved_file();
+    let contents = std::fs::read_to_string(file).map_err(|e| {
+        RouterError::InvalidReceipt(format!(
+            "Failed to read receipt file '{}': {e}",
+            file.display()
+        ))
+    })?;
+
+    let receipt: ExecutionReceipt = serde_json::from_str(&contents).map_err(|e| {
+        RouterError::InvalidReceipt(format!(
+            "Failed to parse receipt JSON from '{}': {e}",
+            file.display()
+        ))
+    })?;
+
+    let patch_bytes = if let Some(ref ppath) = args.patch {
+        Some(std::fs::read(ppath).map_err(|e| {
+            RouterError::InvalidReceipt(format!(
+                "Failed to read patch file '{}': {e}",
+                ppath.display()
+            ))
+        })?)
+    } else {
+        None
+    };
+
+    let driver = resolve_driver("auto")?;
+    let coordinator = RouterCoordinator::new(driver).with_receipt_dir(&args.receipt_dir);
+    let summary = coordinator.ingest_receipt_with_patch(receipt, patch_bytes.as_deref())?;
+
+    if args.json {
+        let json = serde_json::to_string_pretty(&summary)?;
+        println!("{json}");
+    } else {
+        println!(
+            "[RECEIPT INGESTED] Task '{}' (verdict: {})",
+            summary.task_id, summary.verdict
+        );
+        println!(
+            "  Passing:       {}",
+            if summary.is_passing { "YES" } else { "NO" }
+        );
+        println!("  Workspace:     {}", summary.workspace.display());
+        println!("  Checks:        {}", summary.checks_summary);
+        if let Some(ref sha) = summary.git_patch_sha256 {
+            println!("  Patch SHA-256: {}", sha);
+        }
+    }
+    Ok(())
+}
+
+fn handle_receipt_status(args: ReceiptStatusArgs) -> Result<(), RouterError> {
+    let driver = resolve_driver("auto")?;
+    let coordinator = RouterCoordinator::new(driver).with_receipt_dir(&args.receipt_dir);
+    let receipt = coordinator
+        .get_receipt(&args.task_id)?
+        .ok_or_else(|| RouterError::ReceiptNotFound(args.task_id.clone()))?;
+
+    let summary = receipt.summary();
+    if args.json {
+        let json = serde_json::to_string_pretty(&receipt)?;
+        println!("{json}");
+    } else {
+        println!("RECEIPT STATUS for '{}':", summary.task_id);
+        println!("  Verdict:       {}", summary.verdict);
+        println!(
+            "  Passing:       {}",
+            if summary.is_passing { "YES" } else { "NO" }
+        );
+        println!("  Workspace:     {}", summary.workspace.display());
+        println!("  Checks:        {}", summary.checks_summary);
+        if let Some(ref ts) = summary.receipt_timestamp {
+            println!("  Timestamp:     {}", ts);
+        }
+        if let Some(ref sha) = summary.git_patch_sha256 {
+            println!("  Patch SHA-256: {}", sha);
+        }
+    }
+    Ok(())
+}
+
+fn handle_receipt_list(args: ReceiptListArgs) -> Result<(), RouterError> {
+    let driver = resolve_driver("auto")?;
+    let coordinator = RouterCoordinator::new(driver).with_receipt_dir(&args.receipt_dir);
+    let receipts = coordinator.list_receipts()?;
+
+    if args.json {
+        let summaries: Vec<_> = receipts.iter().map(|r| r.summary()).collect();
+        let json = serde_json::to_string_pretty(&summaries)?;
+        println!("{json}");
+    } else if receipts.is_empty() {
+        println!(
+            "No execution receipts found in {}.",
+            args.receipt_dir.display()
+        );
+    } else {
+        println!(
+            "EXECUTION RECEIPTS ({} total) in {}:",
+            receipts.len(),
+            args.receipt_dir.display()
+        );
+        println!(
+            "{:<20} {:<10} {:<10} WORKSPACE",
+            "TASK ID", "VERDICT", "PASSING"
+        );
+        println!("{}", "-".repeat(70));
+        for r in &receipts {
+            println!(
+                "{:<20} {:<10} {:<10} {}",
+                r.task_id,
+                r.verdict,
+                if r.is_passing() { "YES" } else { "NO" },
+                r.workspace.display()
+            );
+        }
+    }
+    Ok(())
+}
+
 fn run(cli: Cli) -> Result<(), RouterError> {
     match cli.command {
         Commands::Status(args) => handle_status(args),
@@ -657,6 +886,7 @@ fn run(cli: Cli) -> Result<(), RouterError> {
             OutboxAction::Approve(args) => handle_outbox_approve(args),
             OutboxAction::Reject(args) => handle_outbox_reject(args),
         },
+        Commands::Receipt(cmd) => handle_receipt(cmd),
         Commands::ListStaged(args) => handle_outbox_list(args),
         Commands::InspectStaged(args) => handle_outbox_inspect(args),
         Commands::Approve(args) => handle_outbox_approve(args),
@@ -688,6 +918,9 @@ fn main() -> ExitCode {
                     RouterError::Io(_) => "Io",
                     RouterError::Json(_) => "Json",
                     RouterError::DateTimeParse(_) => "DateTimeParse",
+                    RouterError::InvalidReceipt(_) => "InvalidReceipt",
+                    RouterError::ReceiptNotFound(_) => "ReceiptNotFound",
+                    RouterError::WorkspaceError(_) => "WorkspaceError",
                 };
                 let json_err = serde_json::json!({
                     "status": "error",

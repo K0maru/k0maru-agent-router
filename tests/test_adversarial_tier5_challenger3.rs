@@ -647,6 +647,7 @@ fn test_c3_route_outcome_and_format_agent_prompt_stress() {
     let outcome_disp = RouteOutcome::Dispatched {
         session: session.clone(),
         prompt: "Fix bug now".to_string(),
+        sandbox: None,
     };
     assert!(outcome_disp.is_dispatched());
     assert!(!outcome_disp.is_staged());

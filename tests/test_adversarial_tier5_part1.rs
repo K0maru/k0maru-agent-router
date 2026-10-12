@@ -1024,6 +1024,7 @@ fn test_tier5_route_outcome_accessors_and_serde() {
     let dispatched = RouteOutcome::Dispatched {
         session: session.clone(),
         prompt: "Run prompt".to_string(),
+        sandbox: None,
     };
     assert!(dispatched.is_dispatched());
     assert!(!dispatched.is_staged());

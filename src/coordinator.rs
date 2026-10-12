@@ -12,6 +12,8 @@ use crate::error::RouterError;
 use crate::memory::{MemoryHook, NoopMemoryHook};
 use crate::outbox::{HitlOutbox, StagedIssueSummary};
 use crate::policy::{BoundaryPolicy, PolicyVerdict};
+use crate::receipt::{ExecutionReceipt, ReceiptStore, ReceiptSummary};
+use crate::workspace::{InPlaceWorkspaceProvider, WorkspaceProvider};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -25,6 +27,9 @@ pub enum RouteOutcome {
         session: LiveSession,
         /// Verbatim prompt string delivered to the pane.
         prompt: String,
+        /// Optional sandbox workspace path if isolated.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        sandbox: Option<PathBuf>,
     },
     /// Untrusted external task quarantined in the HITL Outbox.
     Staged {
@@ -90,6 +95,17 @@ impl RouteOutcome {
     pub fn reason(&self) -> Option<&str> {
         match self {
             Self::Staged { reason, .. } => Some(reason.as_str()),
+            _ => None,
+        }
+    }
+
+    /// Returns the sandbox directory path if isolated.
+    pub fn sandbox(&self) -> Option<&Path> {
+        match self {
+            Self::Dispatched {
+                sandbox: Some(ref sb),
+                ..
+            } => Some(sb.as_path()),
             _ => None,
         }
     }
@@ -246,18 +262,23 @@ pub struct RouterCoordinator<D: MultiplexerDriver> {
     outbox_dir: PathBuf,
     decision_engine: Arc<dyn DecisionEngine>,
     memory_hook: Arc<dyn MemoryHook>,
+    workspace_provider: Arc<dyn WorkspaceProvider>,
+    receipt_store: ReceiptStore,
 }
 
 impl<D: MultiplexerDriver> RouterCoordinator<D> {
     /// Creates a new `RouterCoordinator` with the specified multiplexer driver.
     /// Defaults `outbox_dir` to `.scratch/staged`, decision engine to `NoopDecisionEngine`,
-    /// and memory hook to `NoopMemoryHook`.
+    /// memory hook to `NoopMemoryHook`, workspace provider to `InPlaceWorkspaceProvider`,
+    /// and receipt store to `.scratch/receipts`.
     pub fn new(driver: D) -> Self {
         Self {
             driver,
             outbox_dir: PathBuf::from(".scratch/staged"),
             decision_engine: Arc::new(NoopDecisionEngine),
             memory_hook: Arc::new(NoopMemoryHook),
+            workspace_provider: Arc::new(InPlaceWorkspaceProvider),
+            receipt_store: ReceiptStore::default(),
         }
     }
 
@@ -291,6 +312,30 @@ impl<D: MultiplexerDriver> RouterCoordinator<D> {
         self
     }
 
+    /// Configures a custom workspace provider.
+    pub fn with_workspace_provider(mut self, provider: impl WorkspaceProvider + 'static) -> Self {
+        self.workspace_provider = Arc::new(provider);
+        self
+    }
+
+    /// Configures a shared workspace provider via Arc.
+    pub fn with_workspace_provider_arc(mut self, provider: Arc<dyn WorkspaceProvider>) -> Self {
+        self.workspace_provider = provider;
+        self
+    }
+
+    /// Configures a custom receipt store.
+    pub fn with_receipt_store(mut self, store: ReceiptStore) -> Self {
+        self.receipt_store = store;
+        self
+    }
+
+    /// Configures a custom receipts directory for the receipt store.
+    pub fn with_receipt_dir(mut self, path: impl Into<PathBuf>) -> Self {
+        self.receipt_store = ReceiptStore::new(path);
+        self
+    }
+
     /// Returns a reference to the configured outbox directory.
     pub fn outbox_dir(&self) -> &Path {
         &self.outbox_dir
@@ -311,35 +356,73 @@ impl<D: MultiplexerDriver> RouterCoordinator<D> {
         self.memory_hook.as_ref()
     }
 
+    /// Returns a reference to the active workspace provider.
+    pub fn workspace_provider(&self) -> &dyn WorkspaceProvider {
+        self.workspace_provider.as_ref()
+    }
+
+    /// Returns a reference to the active receipt store.
+    pub fn receipt_store(&self) -> &ReceiptStore {
+        &self.receipt_store
+    }
+
+    /// Helper to synchronously execute an async future on current or newly built runtime.
+    fn block_on<F, T>(&self, future: F) -> Result<T, RouterError>
+    where
+        F: std::future::Future<Output = Result<T, RouterError>> + Send,
+        T: Send,
+    {
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            if handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread {
+                tokio::task::block_in_place(|| handle.block_on(future))
+            } else {
+                std::thread::scope(|s| {
+                    s.spawn(|| {
+                        let rt = tokio::runtime::Builder::new_current_thread()
+                            .enable_all()
+                            .build()
+                            .map_err(|e| {
+                                RouterError::DriverExecutionFailed(format!(
+                                    "Failed to initialize runtime: {e}"
+                                ))
+                            })?;
+                        rt.block_on(future)
+                    })
+                    .join()
+                    .map_err(|_| {
+                        RouterError::DriverExecutionFailed(
+                            "Scoped thread execution panicked".to_string(),
+                        )
+                    })?
+                })
+            }
+        } else {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .map_err(|e| {
+                    RouterError::DriverExecutionFailed(format!("Failed to initialize runtime: {e}"))
+                })?;
+            rt.block_on(future)
+        }
+    }
+
     /// Synchronously evaluates a `TaskEnvelope` against candidate targets using the configured decision engine.
     pub fn evaluate_candidates(
         &self,
         envelope: &TaskEnvelope,
         candidates: &[(&str, &str)],
     ) -> Result<DecisionRoutingOutcome, RouterError> {
-        if let Ok(handle) = tokio::runtime::Handle::try_current() {
-            tokio::task::block_in_place(|| {
-                handle.block_on(self.decision_engine.evaluate_task(envelope, candidates))
-            })
-        } else {
-            let rt = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .map_err(|e| {
-                    RouterError::DriverExecutionFailed(format!(
-                        "Failed to initialize runtime for decision engine: {e}"
-                    ))
-                })?;
-            rt.block_on(self.decision_engine.evaluate_task(envelope, candidates))
-        }
+        self.block_on(self.decision_engine.evaluate_task(envelope, candidates))
     }
 
-    /// Ingests, validates, and routes a `TaskEnvelope` with optional candidate targets for ambiguous tasks.
-    pub fn route_envelope_with_candidates(
+    /// Ingests, validates, and routes a `TaskEnvelope` with support for candidate targets and optional workspace isolation.
+    pub fn route_task(
         &self,
         envelope: &TaskEnvelope,
         candidates: &[(&str, &str)],
         dry_run: bool,
+        isolate: bool,
     ) -> Result<RouteOutcome, RouterError> {
         let is_ambiguous = envelope.target.identifier == "auto"
             || envelope.target.identifier == "unspecified"
@@ -410,9 +493,27 @@ impl<D: MultiplexerDriver> RouterCoordinator<D> {
         // Fail fast if workspace directory does not exist or is invalid
         let canonical_ws = normalize_workspace_path(&raw_ws)?;
 
+        // Determine if workspace isolation is requested
+        let needs_isolation = isolate
+            || target_envelope.intent.eq_ignore_ascii_case("isolate")
+            || target_envelope.intent.eq_ignore_ascii_case("isolated")
+            || target_envelope.intent.starts_with("isolate:");
+
+        let (effective_ws, sandbox_opt) = if needs_isolation && !dry_run {
+            let sb = self.block_on(self.workspace_provider.provision_sandbox(
+                &target_envelope.id,
+                &canonical_ws,
+                None,
+            ))?;
+            let normalized_sb = normalize_workspace_path(&sb).unwrap_or_else(|_| sb.clone());
+            (normalized_sb.clone(), Some(normalized_sb))
+        } else {
+            (canonical_ws.clone(), None)
+        };
+
         // Query live multiplexer sessions and resolve physical address
         let live_sessions = self.driver.list_sessions()?;
-        let resolution = resolve_session(&canonical_ws, &live_sessions)?;
+        let resolution = resolve_session(&effective_ws, &live_sessions)?;
 
         if dry_run {
             return Ok(RouteOutcome::DryRun {
@@ -430,14 +531,32 @@ impl<D: MultiplexerDriver> RouterCoordinator<D> {
         match resolution {
             SessionResolution::HotSession(session) => {
                 self.driver.send_prompt(&session.pane_id, &prompt)?;
-                Ok(RouteOutcome::Dispatched { session, prompt })
+                Ok(RouteOutcome::Dispatched {
+                    session,
+                    prompt,
+                    sandbox: sandbox_opt,
+                })
             }
             SessionResolution::ColdSpawn { canonical_path } => {
                 let session = self.driver.spawn_pane(&canonical_path, None)?;
                 self.driver.send_prompt(&session.pane_id, &prompt)?;
-                Ok(RouteOutcome::Dispatched { session, prompt })
+                Ok(RouteOutcome::Dispatched {
+                    session,
+                    prompt,
+                    sandbox: sandbox_opt,
+                })
             }
         }
+    }
+
+    /// Ingests, validates, and routes a `TaskEnvelope` with optional candidate targets for ambiguous tasks.
+    pub fn route_envelope_with_candidates(
+        &self,
+        envelope: &TaskEnvelope,
+        candidates: &[(&str, &str)],
+        dry_run: bool,
+    ) -> Result<RouteOutcome, RouterError> {
+        self.route_task(envelope, candidates, dry_run, false)
     }
 
     /// Ingests, validates, and routes a `TaskEnvelope`.
@@ -451,6 +570,7 @@ impl<D: MultiplexerDriver> RouterCoordinator<D> {
     /// 4. If `PolicyVerdict::TrustedInternal`:
     ///    - Extracts target workspace path from `envelope.target.workspace` (or fallback).
     ///    - Fails fast with `RouterError::WorkspaceNotFound` if the directory does not exist.
+    ///    - If isolation is requested, provisions sandbox workspace via `WorkspaceProvider`.
     ///    - Queries live sessions and resolves session via `resolve_session`.
     ///    - If `dry_run`: returns `Ok(RouteOutcome::DryRun { verdict, resolution: Some(resolution) })`.
     ///    - Preloads architectural blueprint context via memory hook.
@@ -463,7 +583,42 @@ impl<D: MultiplexerDriver> RouterCoordinator<D> {
         envelope: &TaskEnvelope,
         dry_run: bool,
     ) -> Result<RouteOutcome, RouterError> {
-        self.route_envelope_with_candidates(envelope, &[], dry_run)
+        self.route_task(envelope, &[], dry_run, false)
+    }
+
+    /// Ingests, validates, and stores an `ExecutionReceipt`.
+    pub fn ingest_receipt(&self, receipt: ExecutionReceipt) -> Result<ReceiptSummary, RouterError> {
+        self.ingest_receipt_with_patch(receipt, None)
+    }
+
+    /// Ingests and validates an `ExecutionReceipt`, additionally verifying patch SHA-256 integrity if patch bytes provided.
+    pub fn ingest_receipt_with_patch(
+        &self,
+        receipt: ExecutionReceipt,
+        patch_bytes: Option<&[u8]>,
+    ) -> Result<ReceiptSummary, RouterError> {
+        receipt.validate()?;
+
+        if let Some(bytes) = patch_bytes {
+            if !receipt.verify_patch_sha256(bytes)? {
+                return Err(RouterError::InvalidReceipt(
+                    "Git patch SHA-256 integrity verification failed".to_string(),
+                ));
+            }
+        }
+
+        self.receipt_store.save(&receipt)?;
+        Ok(receipt.summary())
+    }
+
+    /// Queries a stored execution receipt by task ID.
+    pub fn get_receipt(&self, task_id: &str) -> Result<Option<ExecutionReceipt>, RouterError> {
+        self.receipt_store.get(task_id)
+    }
+
+    /// Lists all stored execution receipts, sorted deterministically.
+    pub fn list_receipts(&self) -> Result<Vec<ExecutionReceipt>, RouterError> {
+        self.receipt_store.list()
     }
 
     /// Probes active multiplexer sessions matching the specified workspace directory.

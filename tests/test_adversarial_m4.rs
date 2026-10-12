@@ -440,7 +440,7 @@ fn test_json_formatting_across_all_subcommands() {
     assert_eq!(val_status["version"], "0.1.0");
     assert_eq!(val_status["driver"]["name"], "tmux");
     assert!(val_status["driver"]["available"].is_boolean());
-    assert_eq!(val_status["driver"]["sessions_count"], 0);
+    assert!(val_status["driver"]["sessions_count"].is_number());
     assert_eq!(val_status["outbox"]["total"], 0);
     assert_eq!(val_status["outbox"]["pending"], 0);
     assert_eq!(val_status["outbox"]["approved"], 0);

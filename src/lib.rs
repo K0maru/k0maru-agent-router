@@ -12,6 +12,8 @@ pub mod mcp;
 pub mod memory;
 pub mod outbox;
 pub mod policy;
+pub mod receipt;
+pub mod workspace;
 
 pub use addressing::{normalize_workspace_path, resolve_session, SessionResolution};
 pub use coordinator::{
@@ -38,3 +40,11 @@ pub use mcp::{
 pub use memory::{MemoryHook, NoopMemoryHook, OptionalMemoryHook};
 pub use outbox::{HitlOutbox, StagedIssueStatus, StagedIssueSummary, StagedStatus};
 pub use policy::{BoundaryPolicy, PolicyVerdict};
+pub use receipt::{
+    CompilationCheck, ExecutionChecks, ExecutionReceipt, LinterCheck, ReceiptArtifacts,
+    ReceiptStore, ReceiptSummary, ReceiptVerdict, ScopeGuardCheck, TestCheck,
+    DEFAULT_RECEIPT_SCHEMA,
+};
+pub use workspace::{
+    CliWorkspaceProvider, InPlaceWorkspaceProvider, OptionalWorkspaceProvider, WorkspaceProvider,
+};

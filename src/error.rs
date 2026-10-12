@@ -48,6 +48,18 @@ pub enum RouterError {
     /// RFC-3339 / ISO-8601 timestamp parsing error.
     #[error("Timestamp parsing error: {0}")]
     DateTimeParse(#[from] chrono::ParseError),
+
+    /// Execution receipt validation or parsing error.
+    #[error("Invalid execution receipt: {0}")]
+    InvalidReceipt(String),
+
+    /// Receipt not found in store.
+    #[error("Receipt not found for task: '{0}'")]
+    ReceiptNotFound(String),
+
+    /// Workspace provisioning or teardown error.
+    #[error("Workspace error: {0}")]
+    WorkspaceError(String),
 }
 
 impl PartialEq for RouterError {
@@ -72,6 +84,9 @@ impl PartialEq for RouterError {
             (Self::Io(a), Self::Io(b)) => a.kind() == b.kind(),
             (Self::Json(a), Self::Json(b)) => a.to_string() == b.to_string(),
             (Self::DateTimeParse(a), Self::DateTimeParse(b)) => a == b,
+            (Self::InvalidReceipt(a), Self::InvalidReceipt(b)) => a == b,
+            (Self::ReceiptNotFound(a), Self::ReceiptNotFound(b)) => a == b,
+            (Self::WorkspaceError(a), Self::WorkspaceError(b)) => a == b,
             _ => false,
         }
     }

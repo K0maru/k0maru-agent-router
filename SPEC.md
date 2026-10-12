@@ -179,17 +179,87 @@ pub trait MemoryHook: Send + Sync {
 
 ---
 
-## 6. Phase Milestones & Delivery Plan
+## 6. Execution Receipt Protocol (`agent-receipt-v1`)
+
+To form a closed-loop execution lifecycle and verify deterministic results from downstream agents and verifiers (`k0maru-agent-verifier`), `k0maru-agent-router` ingests and validates immutable execution receipts:
+
+```json
+{
+  "$schema": "https://k0maru.dev/schemas/agent-receipt-v1.json",
+  "task_id": "task_demo_auth_01",
+  "workspace": "/path/to/.worktrees/task_demo_auth_01",
+  "verdict": "success",
+  "checks": {
+    "compilation": { "status": "passed", "exit_code": 0 },
+    "tests": { "status": "passed", "total": 22, "failed": 0, "duration_ms": 340 },
+    "linter": { "status": "passed", "warnings": 0 },
+    "scope_guard": { "status": "passed", "modified_files": ["src/auth.rs", "tests/auth_test.rs"] }
+  },
+  "artifacts": {
+    "git_patch_sha256": "8f4a2b91c7...",
+    "receipt_timestamp": "2026-10-12T14:20:00Z"
+  }
+}
+```
+
+### Data Structures & State Machine
+- `ReceiptVerdict`: `Success` | `Failed` | `Blocked`
+- Checks:
+  - `compilation`: status (`passed` | `failed`), exit code
+  - `tests`: status (`passed` | `failed`), total, failed, duration_ms
+  - `linter`: status (`passed` | `failed`), warnings count
+  - `scope_guard`: status (`passed` | `failed`), list of modified files
+- Receipt Verification Invariants:
+  - `git_patch_sha256`: Optional cryptographic SHA-256 digest of the diff/patch for anti-tamper verification.
+  - Fail-fast rejection: When `verdict == Failed` or any hard check has non-zero exit code, the task is flagged as failed.
+
+---
+
+## 7. Workspace Isolation Provider SPI (`WorkspaceProvider`)
+
+To prevent dirty-write branch concurrency in active developer workspaces, the router provides an optional workspace isolation hook interfacing with `k0maru-agent-workspace`:
+
+```rust
+#[async_trait]
+pub trait WorkspaceProvider: Send + Sync {
+    fn name(&self) -> &'static str;
+    fn is_available(&self) -> bool;
+    async fn provision_sandbox(
+        &self,
+        task_id: &str,
+        repo_root: &Path,
+        base_branch: Option<&str>,
+    ) -> Result<PathBuf, RouterError>;
+    async fn teardown_sandbox(
+        &self,
+        task_id: &str,
+        repo_root: &Path,
+    ) -> Result<(), RouterError>;
+}
+```
+
+### Pluggable Providers & Graceful Degradation:
+1. **`InPlaceWorkspaceProvider` (Default)**:
+   - Returns the original `repo_root` untouched. Zero overhead, zero external dependencies.
+2. **`CliWorkspaceProvider`**:
+   - Executes `k0maru-workspace provision --task-id <id> --repo <path>` via subprocess.
+   - If `k0maru-workspace` binary is absent, gracefully falls back to `InPlaceWorkspaceProvider` with a log notice.
+3. **Dynamic Routing Integration**:
+   - When a task envelope requests isolation (or `--isolate` flag is passed), the Coordinator provisions a worktree sandbox, redirects the target CWD to the isolated path, and dispatches the agent inside the sandbox.
+
+---
+
+## 8. Phase Milestones & Delivery Plan
 
 - **Phase 1: Spec, Task Envelope & HITL Outbox Gate**: ✅ Completed (v0.1.0)
 - **Phase 2: Physical CWD Addressing & Multiplexer SPI**: ✅ Completed (v0.1.0, Herdr + Tmux)
-- **Phase 3: Decision SPI & Decoupled Memory Preload (Current)**:
-  - `DecisionEngine` trait & `CascadingDecisionEngine`.
-  - `LayaDecisionClient` (local ModernBERT / `laya-serve` `POST /v1/systemone`) and Jev cloud fallback.
-  - Decoupled `MemoryHook` trait with `NoopMemoryHook` fallback and non-blocking degradation.
-  - Real cross-repo defect dispatch and blueprint preload verification.
-- **Phase 4: Harness Synthesis & Autonomous Loop**:
-  - Integration into full K0maru-Harness matrix with execution receipts.
+- **Phase 3: Decision SPI & Decoupled Memory Preload**: ✅ Completed (PR #2 merged, 386 tests green)
+- **Phase 4: Harness Synthesis & Autonomous Loop (Active)**:
+  - `agent-receipt-v1` receipt protocol & validation (`src/receipt.rs`).
+  - `WorkspaceProvider` SPI & isolation adapter (`src/workspace.rs`).
+  - Receipt storage, CLI commands (`k0maru-router receipt`), and MCP tools (`ingest_receipt`, `query_receipt`).
+  - Coordinator closed-loop workflow: Envelope ➔ Optional Sandbox ➔ Dispatch ➔ Receipt Verification.
 - **Phase 5: Distributed Federation & Heterogeneous Hardware**:
   - Remote SSH driver over Tailscale, GPU compilation servers, and edge hardware bus integration.
+
 
