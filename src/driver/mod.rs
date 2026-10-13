@@ -4,9 +4,11 @@
 //! for interacting with terminal multiplexers (such as `tmux` or `herdr`).
 
 pub mod herdr;
+pub mod remote;
 pub mod tmux;
 
 pub use herdr::HerdrDriver;
+pub use remote::{RemoteBackend, RemoteSshDriver};
 pub use tmux::{parse_pane_line, parse_tmux_output, TmuxDriver};
 
 use crate::error::RouterError;
@@ -114,6 +116,7 @@ pub trait MultiplexerDriver: Send + Sync {
 pub enum AnyDriver {
     Tmux(TmuxDriver),
     Herdr(HerdrDriver),
+    Remote(RemoteSshDriver),
 }
 
 impl MultiplexerDriver for AnyDriver {
@@ -121,6 +124,7 @@ impl MultiplexerDriver for AnyDriver {
         match self {
             Self::Tmux(d) => d.name(),
             Self::Herdr(d) => d.name(),
+            Self::Remote(d) => d.name(),
         }
     }
 
@@ -128,6 +132,7 @@ impl MultiplexerDriver for AnyDriver {
         match self {
             Self::Tmux(d) => d.is_available(),
             Self::Herdr(d) => d.is_available(),
+            Self::Remote(d) => d.is_available(),
         }
     }
 
@@ -135,6 +140,7 @@ impl MultiplexerDriver for AnyDriver {
         match self {
             Self::Tmux(d) => d.list_sessions(),
             Self::Herdr(d) => d.list_sessions(),
+            Self::Remote(d) => d.list_sessions(),
         }
     }
 
@@ -142,6 +148,7 @@ impl MultiplexerDriver for AnyDriver {
         match self {
             Self::Tmux(d) => d.send_prompt(pane_id, prompt),
             Self::Herdr(d) => d.send_prompt(pane_id, prompt),
+            Self::Remote(d) => d.send_prompt(pane_id, prompt),
         }
     }
 
@@ -153,6 +160,7 @@ impl MultiplexerDriver for AnyDriver {
         match self {
             Self::Tmux(d) => d.spawn_pane(workspace, command),
             Self::Herdr(d) => d.spawn_pane(workspace, command),
+            Self::Remote(d) => d.spawn_pane(workspace, command),
         }
     }
 }

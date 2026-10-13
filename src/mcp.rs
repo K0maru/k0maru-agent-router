@@ -1002,6 +1002,14 @@ impl<D: MultiplexerDriver + Clone> McpServer<D> {
                     .collect()
             })
             .unwrap_or_default();
+        let node = args
+            .get("node")
+            .and_then(|v| v.as_str())
+            .map(ToString::to_string);
+        let remote_backend = args
+            .get("remote_backend")
+            .and_then(|v| v.as_str())
+            .map(ToString::to_string);
 
         let config = crate::pipeline::PipelineConfig {
             task_id,
@@ -1015,6 +1023,8 @@ impl<D: MultiplexerDriver + Clone> McpServer<D> {
             emit_signal,
             crystallize_memory,
             allowed_files,
+            node,
+            remote_backend,
         };
 
         let rt = match tokio::runtime::Builder::new_current_thread()

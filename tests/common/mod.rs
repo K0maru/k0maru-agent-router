@@ -28,11 +28,13 @@ pub fn sample_internal_envelope() -> TaskEnvelope {
             workspace: "/Users/k0maru3/workspace/consumer-app".to_string(),
             agent: "agy".to_string(),
             pane_id: Some("%1".to_string()),
+            node: None,
         },
         target: TargetInfo {
             identifier: "internal-core".to_string(),
             workspace: Some("/Users/k0maru3/workspace/core".to_string()),
             is_external: false,
+            node: None,
         },
         intent: "bug_report".to_string(),
         payload: TaskPayload {
@@ -57,11 +59,13 @@ pub fn sample_external_envelope() -> TaskEnvelope {
             workspace: "/Users/k0maru3/workspace/consumer-app".to_string(),
             agent: "agy".to_string(),
             pane_id: Some("%1".to_string()),
+            node: None,
         },
         target: TargetInfo {
             identifier: "Terra-UI".to_string(),
             workspace: Some("/Users/k0maru3/workspace/terra-ui".to_string()),
             is_external: true,
+            node: None,
         },
         intent: "bug_report".to_string(),
         payload: TaskPayload {

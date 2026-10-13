@@ -512,8 +512,13 @@ impl<D: MultiplexerDriver> RouterCoordinator<D> {
             }
         };
 
-        // Fail fast if workspace directory does not exist or is invalid
-        let canonical_ws = normalize_workspace_path(&raw_ws)?;
+        // Fail fast if workspace directory does not exist or is invalid (skip for remote nodes)
+        let is_remote = !crate::addressing::is_local_node(target_envelope.target.node.as_deref());
+        let canonical_ws = if is_remote {
+            raw_ws
+        } else {
+            normalize_workspace_path(&raw_ws)?
+        };
 
         // Determine if workspace isolation is requested
         let needs_isolation = isolate
@@ -521,7 +526,7 @@ impl<D: MultiplexerDriver> RouterCoordinator<D> {
             || target_envelope.intent.eq_ignore_ascii_case("isolated")
             || target_envelope.intent.starts_with("isolate:");
 
-        let (effective_ws, sandbox_opt) = if needs_isolation && !dry_run {
+        let (effective_ws, sandbox_opt) = if needs_isolation && !is_remote && !dry_run {
             let sb = self.block_on(self.workspace_provider.provision_sandbox(
                 &target_envelope.id,
                 &canonical_ws,
@@ -535,7 +540,11 @@ impl<D: MultiplexerDriver> RouterCoordinator<D> {
 
         // Query live multiplexer sessions and resolve physical address
         let live_sessions = self.driver.list_sessions()?;
-        let resolution = resolve_session(&effective_ws, &live_sessions)?;
+        let resolution = if is_remote {
+            crate::addressing::resolve_remote_session(&effective_ws, &live_sessions)
+        } else {
+            resolve_session(&effective_ws, &live_sessions)?
+        };
 
         if dry_run {
             return Ok(RouteOutcome::DryRun {
@@ -667,9 +676,18 @@ impl<D: MultiplexerDriver> RouterCoordinator<D> {
     ///
     /// Fails fast with `RouterError::WorkspaceNotFound` if the directory does not exist on disk.
     pub fn probe_workspace(&self, workspace: &Path) -> Result<SessionResolution, RouterError> {
-        let canonical = normalize_workspace_path(workspace)?;
-        let live_sessions = self.driver.list_sessions()?;
-        resolve_session(&canonical, &live_sessions)
+        let is_remote = self.driver.name().starts_with("remote");
+        if is_remote {
+            let live_sessions = self.driver.list_sessions()?;
+            Ok(crate::addressing::resolve_remote_session(
+                workspace,
+                &live_sessions,
+            ))
+        } else {
+            let canonical = normalize_workspace_path(workspace)?;
+            let live_sessions = self.driver.list_sessions()?;
+            resolve_session(&canonical, &live_sessions)
+        }
     }
 
     /// Inspects global router health, driver availability, live sessions count, and outbox metrics.
@@ -829,6 +847,7 @@ mod tests {
                 workspace: "/caller/ws".to_string(),
                 agent: "caller_agent".to_string(),
                 pane_id: Some("%1".to_string()),
+                node: None,
             },
             target: TargetInfo {
                 identifier: if is_external {
@@ -838,6 +857,7 @@ mod tests {
                 },
                 workspace: workspace.map(String::from),
                 is_external,
+                node: None,
             },
             intent: "bug_report".to_string(),
             payload: TaskPayload {
