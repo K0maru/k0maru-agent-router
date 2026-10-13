@@ -167,6 +167,82 @@ pub fn resolve_session(
     }
 }
 
+/// Determines if a target network node identifier corresponds to the local machine.
+///
+/// Returns `true` if `node` is `None`, empty, or matches common loopback/local aliases
+/// (`"local"`, `"localhost"`, `"127.0.0.1"`, `"::1"`) or the machine's hostname.
+pub fn is_local_node(node: Option<&str>) -> bool {
+    let Some(n) = node else { return true };
+    let clean = n.trim().to_lowercase();
+    if clean.is_empty()
+        || clean == "local"
+        || clean == "localhost"
+        || clean == "127.0.0.1"
+        || clean == "::1"
+    {
+        return true;
+    }
+
+    if let Ok(host) = std::env::var("HOSTNAME") {
+        if host.trim().to_lowercase() == clean {
+            return true;
+        }
+    }
+
+    if let Ok(output) = std::process::Command::new("hostname").output() {
+        if output.status.success() {
+            let sys_host = String::from_utf8_lossy(&output.stdout);
+            if sys_host.trim().to_lowercase() == clean {
+                return true;
+            }
+        }
+    }
+
+    false
+}
+
+/// Resolves a target workspace against a slice of live sessions on a remote host
+/// without performing local filesystem canonicalization checks.
+pub fn resolve_remote_session(
+    target_workspace: impl AsRef<Path>,
+    live_sessions: &[LiveSession],
+) -> SessionResolution {
+    let target_path = target_workspace.as_ref();
+    let norm_target = target_path
+        .to_string_lossy()
+        .trim_end_matches('/')
+        .to_string();
+
+    let mut idle_match = None;
+    let mut working_match = None;
+
+    for session in live_sessions {
+        let s_path = session
+            .cwd
+            .to_string_lossy()
+            .trim_end_matches('/')
+            .to_string();
+        if s_path == norm_target
+            || s_path.ends_with(&format!("/{norm_target}"))
+            || norm_target.ends_with(&format!("/{s_path}"))
+        {
+            if session.status == SessionStatus::Idle && idle_match.is_none() {
+                idle_match = Some(session.clone());
+            } else if working_match.is_none() {
+                working_match = Some(session.clone());
+            }
+        }
+    }
+
+    if let Some(session) = idle_match.or(working_match) {
+        SessionResolution::HotSession(session)
+    } else {
+        SessionResolution::ColdSpawn {
+            canonical_path: target_path.to_path_buf(),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -312,5 +388,39 @@ mod tests {
 
         let res = resolve_session(dir.path(), &[working1.clone(), working2]).unwrap();
         assert_eq!(res, SessionResolution::HotSession(working1));
+    }
+
+    #[test]
+    fn test_is_local_node_variations() {
+        assert!(is_local_node(None));
+        assert!(is_local_node(Some("")));
+        assert!(is_local_node(Some("local")));
+        assert!(is_local_node(Some("LOCAL")));
+        assert!(is_local_node(Some("localhost")));
+        assert!(is_local_node(Some("127.0.0.1")));
+        assert!(is_local_node(Some("::1")));
+
+        assert!(!is_local_node(Some("company-linux")));
+        assert!(!is_local_node(Some("user@100.88.22.33")));
+        assert!(!is_local_node(Some("remote-host.tailscale.net")));
+    }
+
+    #[test]
+    fn test_resolve_remote_session_matches_cwd() {
+        let remote_ws = Path::new("/home/k0maru3/work/backend");
+        let session = LiveSession::new(
+            "%10",
+            PathBuf::from("/home/k0maru3/work/backend"),
+            SessionStatus::Idle,
+            Some("bash".into()),
+        );
+
+        let res = resolve_remote_session(remote_ws, std::slice::from_ref(&session));
+        assert_eq!(res, SessionResolution::HotSession(session));
+
+        let other_ws = Path::new("/var/other/service");
+        let res2 = resolve_remote_session(other_ws, &[]);
+        assert!(res2.is_cold());
+        assert_eq!(res2.canonical_path(), other_ws);
     }
 }

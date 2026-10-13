@@ -24,7 +24,8 @@ pub use pipeline::{
 };
 
 pub use addressing::{
-    is_same_workspace, normalize_workspace_path, resolve_session, SessionResolution,
+    is_local_node, is_same_workspace, normalize_workspace_path, resolve_remote_session,
+    resolve_session, SessionResolution,
 };
 pub use coordinator::{
     format_agent_prompt, DriverStatusSummary, OutboxStatusSummary, RouteOutcome, RouterCoordinator,
@@ -36,8 +37,8 @@ pub use decision::{
     SystemOneRequest, SystemOneResponse,
 };
 pub use driver::{
-    classify_command_status, parse_pane_line, parse_tmux_output, LiveSession, MultiplexerDriver,
-    SessionStatus, TmuxDriver,
+    classify_command_status, parse_pane_line, parse_tmux_output, AnyDriver, LiveSession,
+    MultiplexerDriver, RemoteBackend, RemoteSshDriver, SessionStatus, TmuxDriver,
 };
 pub use envelope::{
     CallerInfo, ReproductionPayload, TargetInfo, TaskEnvelope, TaskPayload, DEFAULT_SCHEMA,

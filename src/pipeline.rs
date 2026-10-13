@@ -132,6 +132,10 @@ pub struct PipelineConfig {
     pub emit_signal: bool,
     pub crystallize_memory: bool,
     pub allowed_files: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub node: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub remote_backend: Option<String>,
 }
 
 impl Default for PipelineConfig {
@@ -154,6 +158,8 @@ impl Default for PipelineConfig {
             emit_signal: true,
             crystallize_memory: false,
             allowed_files: Vec::new(),
+            node: None,
+            remote_backend: None,
         }
     }
 }
@@ -181,6 +187,17 @@ pub struct PipelineRunReport {
 
 /// Executes an end-to-end task pipeline, treating each underlying tool as optional (选配).
 pub async fn execute_pipeline(config: &PipelineConfig) -> Result<PipelineRunReport, RouterError> {
+    if let Some(ref node) = config.node {
+        if !crate::addressing::is_local_node(Some(node)) {
+            let backend = match config.remote_backend.as_deref() {
+                Some(b) => b.parse::<crate::driver::RemoteBackend>()?,
+                None => crate::driver::RemoteBackend::Auto,
+            };
+            let remote_driver = crate::driver::RemoteSshDriver::new(node).with_backend(backend);
+            return remote_driver.run_remote_pipeline(config);
+        }
+    }
+
     let start_all = std::time::Instant::now();
     let mut stages = Vec::new();
     let mut active_workspace = if config.target_workspace.is_absolute() {

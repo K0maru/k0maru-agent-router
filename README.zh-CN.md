@@ -98,6 +98,17 @@ k0maru-router orchestrator status --workspaces /path/to/ws1,/path/to/ws2
 k0maru-router receipt ingest --file /path/to/agent-receipt-v1.json
 k0maru-router receipt status <task_id>
 k0maru-router receipt list
+
+# 7. 分布式 Tailscale & SSH 跨主机调度（支持 tmux 与 herdr 自动嗅探）
+# 探测远端 Linux/macOS 主机驱动与存活会话
+k0maru-router status --node company-linux
+k0maru-router probe --workspace /home/user/backend --node company-linux
+
+# 将任务信封直接注入远端主机终端窗格（支持 tmux 或 herdr）
+k0maru-router route --file task.json --node company-linux --remote-backend auto
+
+# 远端主机闭环执行端到端流水线（沙箱构建、物理验证与收据回传）
+k0maru-router pipeline run --task-id task_dist_01 --workspace /home/user/backend --node company-linux --verify --json
 ```
 
 ### 3. MCP 服务接入配置

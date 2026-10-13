@@ -293,11 +293,13 @@ fn tier3_multi_envelope_batch_staging_isolation() {
                 workspace: "/ws".to_string(),
                 agent: "a".to_string(),
                 pane_id: None,
+                node: None,
             },
             target: TargetInfo {
                 identifier: "ext-1".to_string(),
                 workspace: None,
                 is_external: true,
+                node: None,
             },
             intent: "bug_report".to_string(),
             payload: TaskPayload {
@@ -315,11 +317,13 @@ fn tier3_multi_envelope_batch_staging_isolation() {
                 workspace: "/ws".to_string(),
                 agent: "a".to_string(),
                 pane_id: None,
+                node: None,
             },
             target: TargetInfo {
                 identifier: "int-2".to_string(),
                 workspace: None,
                 is_external: false,
+                node: None,
             },
             intent: "bug_report".to_string(),
             payload: TaskPayload {
@@ -337,11 +341,13 @@ fn tier3_multi_envelope_batch_staging_isolation() {
                 workspace: "/ws".to_string(),
                 agent: "a".to_string(),
                 pane_id: None,
+                node: None,
             },
             target: TargetInfo {
                 identifier: "ext-3".to_string(),
                 workspace: None,
                 is_external: true,
+                node: None,
             },
             intent: "bug_report".to_string(),
             payload: TaskPayload {

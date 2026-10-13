@@ -90,6 +90,7 @@ mod tests {
                 workspace: "/test/ws".to_string(),
                 agent: "test_agent".to_string(),
                 pane_id: None,
+                node: None,
             },
             target: TargetInfo {
                 identifier: identifier.to_string(),
@@ -99,6 +100,7 @@ mod tests {
                     Some("/internal/ws".to_string())
                 },
                 is_external,
+                node: None,
             },
             intent: "bug_report".to_string(),
             payload: TaskPayload {

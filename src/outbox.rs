@@ -531,11 +531,13 @@ mod tests {
                 workspace: "/test/ws".to_string(),
                 agent: "test_caller".to_string(),
                 pane_id: None,
+                node: None,
             },
             target: TargetInfo {
                 identifier: "external-upstream".to_string(),
                 workspace: None,
                 is_external: true,
+                node: None,
             },
             intent: "bug_report".to_string(),
             payload: TaskPayload {

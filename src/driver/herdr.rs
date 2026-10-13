@@ -12,37 +12,37 @@ use std::process::Command;
 pub struct HerdrDriver;
 
 #[derive(Deserialize, Debug)]
-struct HerdrPaneListResponse {
-    result: Option<HerdrPaneListResult>,
+pub(crate) struct HerdrPaneListResponse {
+    pub(crate) result: Option<HerdrPaneListResult>,
 }
 
 #[derive(Deserialize, Debug)]
-struct HerdrPaneListResult {
-    panes: Option<Vec<HerdrPaneItem>>,
+pub(crate) struct HerdrPaneListResult {
+    pub(crate) panes: Option<Vec<HerdrPaneItem>>,
 }
 
 #[derive(Deserialize, Debug)]
-struct HerdrPaneItem {
-    pane_id: String,
-    cwd: String,
-    agent: Option<String>,
-    agent_status: Option<String>,
+pub(crate) struct HerdrPaneItem {
+    pub(crate) pane_id: String,
+    pub(crate) cwd: String,
+    pub(crate) agent: Option<String>,
+    pub(crate) agent_status: Option<String>,
 }
 
 #[derive(Deserialize, Debug)]
-struct HerdrPaneSplitResponse {
-    result: Option<HerdrPaneSplitResult>,
+pub(crate) struct HerdrPaneSplitResponse {
+    pub(crate) result: Option<HerdrPaneSplitResult>,
 }
 
 #[derive(Deserialize, Debug)]
-struct HerdrPaneSplitResult {
-    pane: Option<HerdrPaneInfo>,
+pub(crate) struct HerdrPaneSplitResult {
+    pub(crate) pane: Option<HerdrPaneInfo>,
 }
 
 #[derive(Deserialize, Debug)]
-struct HerdrPaneInfo {
-    pane_id: String,
-    cwd: Option<String>,
+pub(crate) struct HerdrPaneInfo {
+    pub(crate) pane_id: String,
+    pub(crate) cwd: Option<String>,
 }
 
 impl HerdrDriver {

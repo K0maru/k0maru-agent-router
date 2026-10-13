@@ -103,6 +103,14 @@ pub struct StatusArgs {
     #[arg(long, default_value = "tmux")]
     pub driver: String,
 
+    /// Optional remote node hostname or Tailscale alias (e.g. "company-linux")
+    #[arg(long)]
+    pub node: Option<String>,
+
+    /// Remote multiplexer backend (supported: auto, tmux, herdr)
+    #[arg(long, default_value = "auto")]
+    pub remote_backend: String,
+
     /// Output status in machine-readable JSON format
     #[arg(long)]
     pub json: bool,
@@ -119,9 +127,17 @@ pub struct ProbeArgs {
     #[arg(index = 1)]
     pub positional_workspace: Option<PathBuf>,
 
-    /// Multiplexer driver to use (supported: tmux)
+    /// Multiplexer driver to use (supported: tmux, herdr, auto)
     #[arg(long, default_value = "tmux")]
     pub driver: String,
+
+    /// Optional remote node hostname or Tailscale alias (e.g. "company-linux")
+    #[arg(long)]
+    pub node: Option<String>,
+
+    /// Remote multiplexer backend (supported: auto, tmux, herdr)
+    #[arg(long, default_value = "auto")]
+    pub remote_backend: String,
 
     /// Output probe outcome in machine-readable JSON format
     #[arg(long)]
@@ -148,9 +164,17 @@ pub struct RouteArgs {
     #[arg(index = 1)]
     pub positional_file: Option<PathBuf>,
 
-    /// Multiplexer driver to use (supported: tmux)
+    /// Multiplexer driver to use (supported: tmux, herdr, auto)
     #[arg(long, default_value = "tmux")]
     pub driver: String,
+
+    /// Optional remote node hostname or Tailscale alias (e.g. "company-linux")
+    #[arg(long)]
+    pub node: Option<String>,
+
+    /// Remote multiplexer backend (supported: auto, tmux, herdr)
+    #[arg(long, default_value = "auto")]
+    pub remote_backend: String,
 
     /// Path to the staged outbox directory for untrusted external tasks
     #[arg(long, default_value = ".scratch/staged")]
@@ -548,6 +572,14 @@ pub struct PipelineRunArgs {
     #[arg(long = "allowed-files")]
     pub allowed_files: Vec<String>,
 
+    /// Optional remote node hostname or Tailscale alias (e.g. "company-linux")
+    #[arg(long)]
+    pub node: Option<String>,
+
+    /// Remote multiplexer backend (supported: auto, tmux, herdr)
+    #[arg(long, default_value = "auto")]
+    pub remote_backend: String,
+
     /// Output report as JSON
     #[arg(long)]
     pub json: bool,
@@ -567,12 +599,33 @@ impl Default for PipelineRunArgs {
             signal: true,
             flush: false,
             allowed_files: Vec::new(),
+            node: None,
+            remote_backend: "auto".to_string(),
             json: false,
         }
     }
 }
 
 fn resolve_driver(name: &str) -> Result<AnyDriver, RouterError> {
+    resolve_driver_with_remote(name, None, None)
+}
+
+fn resolve_driver_with_remote(
+    name: &str,
+    node: Option<&str>,
+    remote_backend: Option<&str>,
+) -> Result<AnyDriver, RouterError> {
+    if let Some(n) = node {
+        if !k0maru_router::is_local_node(Some(n)) {
+            let backend = match remote_backend {
+                Some(b) => b.parse::<k0maru_router::RemoteBackend>()?,
+                None => k0maru_router::RemoteBackend::Auto,
+            };
+            return Ok(AnyDriver::Remote(
+                k0maru_router::RemoteSshDriver::new(n).with_backend(backend),
+            ));
+        }
+    }
     match name.to_lowercase().as_str() {
         "tmux" => Ok(AnyDriver::Tmux(TmuxDriver::new())),
         "herdr" => Ok(AnyDriver::Herdr(HerdrDriver::new())),
@@ -594,7 +647,11 @@ fn resolve_driver(name: &str) -> Result<AnyDriver, RouterError> {
 }
 
 fn handle_status(args: StatusArgs) -> Result<(), RouterError> {
-    let driver = resolve_driver(&args.driver)?;
+    let driver = resolve_driver_with_remote(
+        &args.driver,
+        args.node.as_deref(),
+        Some(&args.remote_backend),
+    )?;
     let coordinator = RouterCoordinator::new(driver).with_outbox_dir(&args.outbox_dir);
     let status = coordinator.system_status()?;
 
@@ -622,7 +679,11 @@ fn handle_status(args: StatusArgs) -> Result<(), RouterError> {
 }
 
 fn handle_probe(args: ProbeArgs) -> Result<(), RouterError> {
-    let driver = resolve_driver(&args.driver)?;
+    let driver = resolve_driver_with_remote(
+        &args.driver,
+        args.node.as_deref(),
+        Some(&args.remote_backend),
+    )?;
     let coordinator = RouterCoordinator::new(driver);
     let workspace = args.resolved_workspace();
     let resolution = coordinator.probe_workspace(workspace)?;
@@ -715,7 +776,13 @@ fn load_candidates_file(path: &Path) -> Result<Vec<(String, String)>, RouterErro
 }
 
 fn handle_route(args: RouteArgs) -> Result<(), RouterError> {
-    let driver = resolve_driver(&args.driver)?;
+    let file = args.resolved_file();
+    let mut envelope = TaskEnvelope::from_file(file)?;
+    if let Some(ref node) = args.node {
+        envelope.target = envelope.target.with_node(node);
+    }
+    let target_node = envelope.target.node.as_deref();
+    let driver = resolve_driver_with_remote(&args.driver, target_node, Some(&args.remote_backend))?;
     let mut coordinator = RouterCoordinator::new(driver).with_outbox_dir(&args.outbox_dir);
     coordinator = configure_coordinator(
         coordinator,
@@ -723,7 +790,6 @@ fn handle_route(args: RouteArgs) -> Result<(), RouterError> {
         args.laya_url.as_deref(),
         args.no_memory,
     )?;
-    let file = args.resolved_file();
 
     let candidate_entries = if let Some(ref cpath) = args.candidates_file {
         load_candidates_file(cpath)?
@@ -735,7 +801,6 @@ fn handle_route(args: RouteArgs) -> Result<(), RouterError> {
         .map(|(id, desc)| (id.as_str(), desc.as_str()))
         .collect();
 
-    let envelope = TaskEnvelope::from_file(file)?;
     let outcome =
         coordinator.route_task(&envelope, &candidates_slice, args.dry_run, args.isolate)?;
 
@@ -1163,6 +1228,8 @@ fn run_pipeline_args(args: PipelineRunArgs) -> Result<(), RouterError> {
         emit_signal: args.signal,
         crystallize_memory: args.flush,
         allowed_files: args.allowed_files,
+        node: args.node,
+        remote_backend: Some(args.remote_backend),
     };
 
     let rt = tokio::runtime::Builder::new_current_thread()

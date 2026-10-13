@@ -227,14 +227,34 @@ pub fn parse_tmux_output(output: &str) -> Vec<LiveSession> {
 }
 
 /// Parses a single line of tmux format output into a `LiveSession`.
-/// Supports both Tab (`\t`) and Colon (`:`) delimiters.
+/// Supports Pipe (`|`), Tab (`\t`), and Colon (`:`) delimiters.
 pub fn parse_pane_line(line: &str) -> Option<LiveSession> {
     let line = line.trim_end_matches(['\r', '\n']);
     if line.trim().is_empty() {
         return None;
     }
 
-    let (pane_id, raw_cwd, cmd_str) = if line.contains('\t') {
+    let (pane_id, raw_cwd, cmd_str) = if line.contains('|') {
+        let parts: Vec<&str> = line.split('|').collect();
+        if parts.len() < 2 {
+            return None;
+        }
+        let pid = parts[0].trim();
+        let cwd = parts[1].trim();
+        if pid.is_empty()
+            || cwd.is_empty()
+            || !pid.starts_with('%')
+            || pid.contains(char::is_whitespace)
+        {
+            return None;
+        }
+        let cmd = if parts.len() >= 3 {
+            Some(parts[2].trim())
+        } else {
+            None
+        };
+        (pid, cwd, cmd)
+    } else if line.contains('\t') {
         let parts: Vec<&str> = line.split('\t').collect();
         if parts.len() < 2 {
             return None;

@@ -93,6 +93,8 @@ fn test_add() {
         emit_signal: false,
         crystallize_memory: false,
         allowed_files: vec![],
+        node: None,
+        remote_backend: None,
     };
 
     let report = execute_pipeline(&config).await.unwrap();

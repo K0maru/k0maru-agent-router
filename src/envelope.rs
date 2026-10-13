@@ -18,21 +18,30 @@ pub struct CallerInfo {
     pub agent: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pane_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub node: Option<String>,
 }
 
 impl CallerInfo {
-    /// Creates a new `CallerInfo` without a pane ID.
+    /// Creates a new `CallerInfo` without a pane ID or node.
     pub fn new(workspace: impl Into<String>, agent: impl Into<String>) -> Self {
         Self {
             workspace: workspace.into(),
             agent: agent.into(),
             pane_id: None,
+            node: None,
         }
     }
 
     /// Attaches an optional multiplexer pane ID to this `CallerInfo`.
     pub fn with_pane_id(mut self, pane_id: impl Into<String>) -> Self {
         self.pane_id = Some(pane_id.into());
+        self
+    }
+
+    /// Attaches an optional network node identifier to this `CallerInfo`.
+    pub fn with_node(mut self, node: impl Into<String>) -> Self {
+        self.node = Some(node.into());
         self
     }
 
@@ -55,6 +64,13 @@ impl CallerInfo {
                 ));
             }
         }
+        if let Some(node) = &self.node {
+            if node.trim().is_empty() {
+                return Err(RouterError::InvalidEnvelope(
+                    "Task envelope 'caller.node' cannot be empty if specified".to_string(),
+                ));
+            }
+        }
         Ok(())
     }
 }
@@ -66,6 +82,8 @@ pub struct TargetInfo {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub workspace: Option<String>,
     pub is_external: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub node: Option<String>,
 }
 
 impl TargetInfo {
@@ -75,6 +93,7 @@ impl TargetInfo {
             identifier: identifier.into(),
             workspace: Some(workspace.into()),
             is_external: false,
+            node: None,
         }
     }
 
@@ -84,12 +103,19 @@ impl TargetInfo {
             identifier: identifier.into(),
             workspace: None,
             is_external: true,
+            node: None,
         }
     }
 
     /// Sets or replaces the target workspace path.
     pub fn with_workspace(mut self, workspace: impl Into<String>) -> Self {
         self.workspace = Some(workspace.into());
+        self
+    }
+
+    /// Sets or replaces the target network node identifier (e.g. "company-linux", "user@100.88.22.33").
+    pub fn with_node(mut self, node: impl Into<String>) -> Self {
+        self.node = Some(node.into());
         self
     }
 
@@ -114,6 +140,14 @@ impl TargetInfo {
             if ws.trim().is_empty() {
                 return Err(RouterError::InvalidEnvelope(
                     "Target workspace path cannot be empty if specified".to_string(),
+                ));
+            }
+        }
+
+        if let Some(node) = &self.node {
+            if node.trim().is_empty() {
+                return Err(RouterError::InvalidEnvelope(
+                    "Task envelope 'target.node' cannot be empty if specified".to_string(),
                 ));
             }
         }
@@ -961,5 +995,33 @@ mod tests {
             Some("https://k0maru.dev/schemas/agent-task-v1.json")
         );
         assert!(envelope.validate().is_ok());
+    }
+
+    #[test]
+    fn test_node_in_caller_and_target() {
+        let caller = CallerInfo::new("/path/c", "agy").with_node("personal-mac");
+        assert_eq!(caller.node.as_deref(), Some("personal-mac"));
+
+        let target =
+            TargetInfo::new_internal("backend", "/home/user/backend").with_node("company-linux");
+        assert_eq!(target.node.as_deref(), Some("company-linux"));
+
+        let envelope = TaskEnvelope::new(
+            "task_remote_1",
+            "2026-10-13T10:00:00Z",
+            caller,
+            target,
+            "feature",
+            TaskPayload::new("Remote task", "normal"),
+        );
+        assert!(envelope.validate().is_ok());
+
+        let json = envelope.to_json_string().unwrap();
+        assert!(json.contains("\"node\":\"personal-mac\""));
+        assert!(json.contains("\"node\":\"company-linux\""));
+
+        let roundtrip = TaskEnvelope::from_json_str(&json).unwrap();
+        assert_eq!(roundtrip.caller.node.as_deref(), Some("personal-mac"));
+        assert_eq!(roundtrip.target.node.as_deref(), Some("company-linux"));
     }
 }

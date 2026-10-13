@@ -98,6 +98,17 @@ k0maru-router orchestrator status --workspaces /path/to/ws1,/path/to/ws2
 k0maru-router receipt ingest --file /path/to/agent-receipt-v1.json
 k0maru-router receipt status <task_id>
 k0maru-router receipt list
+
+# 7. Distributed Tailscale & SSH Command Dispatch
+# Probe remote Linux/macOS host over Tailscale/SSH (auto-detects tmux vs herdr)
+k0maru-router status --node company-linux
+k0maru-router probe --workspace /home/user/backend --node company-linux
+
+# Route task directly into remote multiplexer session (tmux or herdr)
+k0maru-router route --file task.json --node company-linux --remote-backend auto
+
+# Run end-to-end task pipeline on remote host
+k0maru-router pipeline run --task-id task_dist_01 --workspace /home/user/backend --node company-linux --verify --json
 ```
 
 ### 3. MCP Server Configuration
