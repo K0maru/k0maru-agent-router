@@ -242,3 +242,102 @@ fn test_cli_tuple_ttl_expiration() {
         .success()
         .stdout(predicate::str::contains("\"status\": \"not_found\""));
 }
+
+#[test]
+fn test_cli_tuple_in_reactive_wait() {
+    let temp = tempdir().unwrap();
+    let tuple_dir = temp.path().to_str().unwrap().to_string();
+    let tuple_dir_clone = tuple_dir.clone();
+
+    // Spawn thread to out tuple after 80ms delay
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(80));
+        let mut out_cmd = Command::cargo_bin("k0maru-router").unwrap();
+        out_cmd
+            .args([
+                "tuple",
+                "out",
+                "--kind",
+                "DELAYED_TASK",
+                "--domain",
+                "ASYNC_DOM",
+                "--task-id",
+                "task_delayed_01",
+                "--payload",
+                "delayed_payload",
+                "--tuple-dir",
+                &tuple_dir_clone,
+            ])
+            .assert()
+            .success();
+    });
+
+    // Reactive claim with wait and timeout
+    let mut in_wait_cmd = Command::cargo_bin("k0maru-router").unwrap();
+    in_wait_cmd
+        .args([
+            "tuple",
+            "in",
+            "--kind",
+            "DELAYED_TASK",
+            "--wait",
+            "--timeout",
+            "2",
+            "--tuple-dir",
+            &tuple_dir,
+            "--json",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"task_id\": \"task_delayed_01\""))
+        .stdout(predicate::str::contains("\"domain\": \"ASYNC_DOM\""));
+}
+
+#[test]
+fn test_cli_worker_loop_once() {
+    let temp = tempdir().unwrap();
+    let tuple_dir = temp.path().to_str().unwrap().to_string();
+    let tuple_dir_clone = tuple_dir.clone();
+
+    // Spawn thread to publish task after 100ms
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        let mut out_cmd = Command::cargo_bin("k0maru-router").unwrap();
+        out_cmd
+            .args([
+                "tuple",
+                "out",
+                "--kind",
+                "TASK_READY",
+                "--domain",
+                "WORKER_TEST",
+                "--task-id",
+                "worker_task_01",
+                "--payload",
+                "worker_payload_123",
+                "--tuple-dir",
+                &tuple_dir_clone,
+            ])
+            .assert()
+            .success();
+    });
+
+    // Worker listens for WORKER_TEST domain, processes once, and exits
+    let mut worker_cmd = Command::cargo_bin("k0maru-router").unwrap();
+    worker_cmd
+        .args([
+            "worker",
+            "--domain",
+            "WORKER_TEST",
+            "--once",
+            "--timeout",
+            "3",
+            "--tuple-dir",
+            &tuple_dir,
+            "--json",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"event\": \"task_claimed\""))
+        .stdout(predicate::str::contains("\"task_id\": \"worker_task_01\""));
+}

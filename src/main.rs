@@ -73,6 +73,7 @@ impl Cli {
                 TupleAction::Rd(args) => args.json,
                 TupleAction::List(args) => args.json,
             },
+            Commands::Worker(args) => args.json,
             Commands::Mcp(_) => false,
         }
     }
@@ -113,6 +114,9 @@ enum Commands {
 
     /// Linda Tuple Space primitives (out, in, rd, list) for associative agent communication
     Tuple(TupleCommand),
+
+    /// Autonomous reactive worker loop consuming tasks from the Linda Tuple Space
+    Worker(WorkerArgs),
 }
 
 #[derive(Args, Debug, Clone)]
@@ -743,6 +747,14 @@ pub struct TupleInArgs {
     #[arg(long)]
     pub task_id: Option<String>,
 
+    /// Wait reactively until a matching tuple is published or timeout expires
+    #[arg(long)]
+    pub wait: bool,
+
+    /// Maximum time to wait in seconds (defaults to 30 if --wait is specified)
+    #[arg(long)]
+    pub timeout: Option<u64>,
+
     /// Override tuple space directory (defaults to ~/.k0maru/tuples)
     #[arg(long)]
     pub tuple_dir: Option<PathBuf>,
@@ -765,6 +777,14 @@ pub struct TupleRdArgs {
     /// Optional task_id filter
     #[arg(long)]
     pub task_id: Option<String>,
+
+    /// Wait reactively until a matching tuple is published or timeout expires
+    #[arg(long)]
+    pub wait: bool,
+
+    /// Maximum time to wait in seconds (defaults to 30 if --wait is specified)
+    #[arg(long)]
+    pub timeout: Option<u64>,
 
     /// Override tuple space directory (defaults to ~/.k0maru/tuples)
     #[arg(long)]
@@ -794,6 +814,42 @@ pub struct TupleListArgs {
     pub tuple_dir: Option<PathBuf>,
 
     /// Output JSON formatted list
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct WorkerArgs {
+    /// Target domain to consume tasks for (e.g. ROUTER, AUTH-SRV)
+    #[arg(long, short)]
+    pub domain: String,
+
+    /// Task event kind to listen for (default: TASK_READY)
+    #[arg(long, default_value = "TASK_READY")]
+    pub kind: String,
+
+    /// Optional task ID to wait for specifically
+    #[arg(long)]
+    pub task_id: Option<String>,
+
+    /// Process a single task and exit
+    #[arg(long)]
+    pub once: bool,
+
+    /// Idle timeout in seconds before worker exits if no task is claimed
+    #[arg(long)]
+    pub timeout: Option<u64>,
+
+    /// Shell command or script to execute when a task is claimed.
+    /// Environment variables set: K0MARU_TASK_ID, K0MARU_DOMAIN, K0MARU_PAYLOAD, K0MARU_TUPLE_ID
+    #[arg(long)]
+    pub exec: Option<String>,
+
+    /// Override tuple space directory (defaults to ~/.k0maru/tuples)
+    #[arg(long)]
+    pub tuple_dir: Option<PathBuf>,
+
+    /// Output events as machine-readable JSON
     #[arg(long)]
     pub json: bool,
 }
@@ -1571,7 +1627,12 @@ fn handle_tuple(cmd: TupleCommand) -> Result<(), RouterError> {
             if let Some(t) = args.task_id {
                 pattern = pattern.with_task_id(t);
             }
-            let claimed = engine.take(&pattern)?;
+            let claimed = if args.wait || args.timeout.is_some() {
+                let timeout_secs = args.timeout.unwrap_or(30);
+                engine.take_wait(&pattern, std::time::Duration::from_secs(timeout_secs))?
+            } else {
+                engine.take(&pattern)?
+            };
             match claimed {
                 Some(t) => {
                     if args.json {
@@ -1608,7 +1669,12 @@ fn handle_tuple(cmd: TupleCommand) -> Result<(), RouterError> {
             if let Some(t) = args.task_id {
                 pattern = pattern.with_task_id(t);
             }
-            let found = engine.rd(&pattern)?;
+            let found = if args.wait || args.timeout.is_some() {
+                let timeout_secs = args.timeout.unwrap_or(30);
+                engine.rd_wait(&pattern, std::time::Duration::from_secs(timeout_secs))?
+            } else {
+                engine.rd(&pattern)?
+            };
             match found {
                 Some(t) => {
                     if args.json {
@@ -1662,6 +1728,100 @@ fn handle_tuple(cmd: TupleCommand) -> Result<(), RouterError> {
     }
 }
 
+fn handle_worker(args: WorkerArgs) -> Result<(), RouterError> {
+    let dir = resolve_tuples_dir(args.tuple_dir.as_deref());
+    let engine = TupleSpaceEngine::new(dir);
+
+    let pattern = TuplePattern::new()
+        .with_kind(&args.kind)
+        .with_domain(&args.domain);
+    let pattern = if let Some(ref t) = args.task_id {
+        pattern.with_task_id(t)
+    } else {
+        pattern
+    };
+
+    if !args.json {
+        println!(
+            "=== K0MARU WORKER LOOP STARTED ===\nDomain : {}\nKind   : {}\nOnce   : {}\nBus    : {}",
+            args.domain,
+            args.kind,
+            args.once,
+            engine.tuple_dir().display()
+        );
+    }
+
+    let start_time = std::time::Instant::now();
+    let poll_timeout = std::time::Duration::from_millis(200);
+
+    loop {
+        // If overall idle timeout is set and exceeded, break
+        if let Some(to) = args.timeout {
+            if start_time.elapsed() >= std::time::Duration::from_secs(to) {
+                if args.json {
+                    let ev = serde_json::json!({ "event": "timeout", "status": "idle_timeout" });
+                    println!("{}", serde_json::to_string_pretty(&ev)?);
+                } else {
+                    println!(
+                        "[WORKER] Idle timeout reached ({}s). Exiting worker loop.",
+                        to
+                    );
+                }
+                break;
+            }
+        }
+
+        // Attempt claim with short wait
+        if let Some(tuple) = engine.take_wait(&pattern, poll_timeout)? {
+            if args.json {
+                let ev = serde_json::json!({
+                    "event": "task_claimed",
+                    "tuple": tuple,
+                });
+                println!("{}", serde_json::to_string_pretty(&ev)?);
+            } else {
+                println!(
+                    "[WORKER] Claimed task '{}' (tuple_id: {})",
+                    tuple.task_id, tuple.id
+                );
+            }
+
+            // If an exec command is specified, execute it
+            if let Some(ref cmd_str) = args.exec {
+                if !args.json {
+                    println!("[WORKER] Executing command: {}", cmd_str);
+                }
+                let mut cmd = std::process::Command::new("sh");
+                cmd.arg("-c").arg(cmd_str);
+                cmd.env("K0MARU_TASK_ID", &tuple.task_id);
+                cmd.env("K0MARU_DOMAIN", &tuple.domain);
+                cmd.env("K0MARU_PAYLOAD", &tuple.payload);
+                cmd.env("K0MARU_TUPLE_ID", &tuple.id);
+
+                let status = cmd.status().map_err(|e| {
+                    RouterError::TupleSpaceError(format!("Worker exec failed: {e}"))
+                })?;
+
+                if !args.json {
+                    println!(
+                        "[WORKER] Command finished with exit code: {:?}",
+                        status.code()
+                    );
+                }
+            }
+
+            if args.once {
+                if !args.json {
+                    println!("[WORKER] Task completed (--once specified). Exiting worker loop.");
+                }
+                break;
+            }
+        }
+    }
+
+    Ok(())
+}
+
 fn run(cli: Cli) -> Result<(), RouterError> {
     match cli.command {
         Commands::Status(args) => handle_status(args),
@@ -1680,6 +1840,7 @@ fn run(cli: Cli) -> Result<(), RouterError> {
         Commands::Pipeline(cmd) => handle_pipeline(cmd),
         Commands::Kdsl(cmd) => handle_kdsl(cmd),
         Commands::Tuple(cmd) => handle_tuple(cmd),
+        Commands::Worker(args) => handle_worker(args),
     }
 }
 

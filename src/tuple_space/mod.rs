@@ -171,6 +171,71 @@ impl TupleSpaceEngine {
         self.take(pattern)
     }
 
+    /// Non-destructively reads the first matching tuple, waiting up to `timeout` if not immediately available.
+    pub fn rd_wait(
+        &self,
+        pattern: &TuplePattern,
+        timeout: std::time::Duration,
+    ) -> Result<Option<Tuple>, RouterError> {
+        let start = std::time::Instant::now();
+        let mut interval_ms = 10u64;
+
+        loop {
+            if let Some(tuple) = self.rd(pattern)? {
+                return Ok(Some(tuple));
+            }
+
+            if start.elapsed() >= timeout {
+                return Ok(None);
+            }
+
+            let remaining = timeout.saturating_sub(start.elapsed());
+            let sleep_duration = std::time::Duration::from_millis(interval_ms).min(remaining);
+            if sleep_duration.is_zero() {
+                return Ok(None);
+            }
+            std::thread::sleep(sleep_duration);
+            interval_ms = (interval_ms * 2).min(100);
+        }
+    }
+
+    /// Atomically claims and removes a matching tuple, waiting up to `timeout` if not immediately available.
+    pub fn take_wait(
+        &self,
+        pattern: &TuplePattern,
+        timeout: std::time::Duration,
+    ) -> Result<Option<Tuple>, RouterError> {
+        let start = std::time::Instant::now();
+        let mut interval_ms = 10u64;
+
+        loop {
+            if let Some(tuple) = self.take(pattern)? {
+                return Ok(Some(tuple));
+            }
+
+            if start.elapsed() >= timeout {
+                return Ok(None);
+            }
+
+            let remaining = timeout.saturating_sub(start.elapsed());
+            let sleep_duration = std::time::Duration::from_millis(interval_ms).min(remaining);
+            if sleep_duration.is_zero() {
+                return Ok(None);
+            }
+            std::thread::sleep(sleep_duration);
+            interval_ms = (interval_ms * 2).min(100);
+        }
+    }
+
+    /// Alias for `take_wait` to match formal Linda `in` primitive with reactive wait.
+    pub fn r#in_wait(
+        &self,
+        pattern: &TuplePattern,
+        timeout: std::time::Duration,
+    ) -> Result<Option<Tuple>, RouterError> {
+        self.take_wait(pattern, timeout)
+    }
+
     /// Lists all non-expired tuples matching the given pattern without consuming them.
     pub fn list(&self, pattern: &TuplePattern) -> Result<Vec<Tuple>, RouterError> {
         let candidates = self.scan_candidates()?;
@@ -402,5 +467,76 @@ mod tests {
             .list(&TuplePattern::new().with_kind("CONCURRENT_TASK"))
             .unwrap();
         assert!(list_remaining.is_empty());
+    }
+
+    #[test]
+    fn test_reactive_take_wait_success() {
+        let temp = tempdir().unwrap();
+        let engine = Arc::new(TupleSpaceEngine::new(temp.path()));
+
+        let engine_clone = Arc::clone(&engine);
+        thread::spawn(move || {
+            thread::sleep(std::time::Duration::from_millis(60));
+            engine_clone
+                .out(Tuple::new(
+                    "REACTIVE_KIND",
+                    "ROUTER",
+                    "task_r1",
+                    "payload_r1",
+                ))
+                .unwrap();
+        });
+
+        let pat = TuplePattern::new().with_kind("REACTIVE_KIND");
+        let claimed = engine
+            .take_wait(&pat, std::time::Duration::from_millis(500))
+            .expect("take_wait failed")
+            .expect("Should have claimed tuple reactively");
+
+        assert_eq!(claimed.task_id, "task_r1");
+    }
+
+    #[test]
+    fn test_reactive_take_wait_timeout() {
+        let temp = tempdir().unwrap();
+        let engine = TupleSpaceEngine::new(temp.path());
+
+        let pat = TuplePattern::new().with_kind("NON_EXISTENT");
+        let start = std::time::Instant::now();
+        let claimed = engine
+            .take_wait(&pat, std::time::Duration::from_millis(50))
+            .expect("take_wait failed");
+
+        assert!(claimed.is_none());
+        assert!(start.elapsed() >= std::time::Duration::from_millis(45));
+    }
+
+    #[test]
+    fn test_reactive_rd_wait_success() {
+        let temp = tempdir().unwrap();
+        let engine = Arc::new(TupleSpaceEngine::new(temp.path()));
+
+        let engine_clone = Arc::clone(&engine);
+        thread::spawn(move || {
+            thread::sleep(std::time::Duration::from_millis(40));
+            engine_clone
+                .out(Tuple::new(
+                    "RD_WAIT_KIND",
+                    "DOM_WAIT",
+                    "task_w1",
+                    "payload_w1",
+                ))
+                .unwrap();
+        });
+
+        let pat = TuplePattern::new().with_kind("RD_WAIT_KIND");
+        let found = engine
+            .rd_wait(&pat, std::time::Duration::from_millis(400))
+            .expect("rd_wait failed")
+            .expect("Should have found tuple reactively");
+
+        assert_eq!(found.task_id, "task_w1");
+        // Verify it was NOT consumed
+        assert!(engine.rd(&pat).unwrap().is_some());
     }
 }
