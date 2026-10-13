@@ -8,6 +8,7 @@ pub mod decision;
 pub mod driver;
 pub mod envelope;
 pub mod error;
+pub mod kdsl;
 pub mod mcp;
 pub mod memory;
 pub mod orchestrator;
@@ -16,7 +17,19 @@ pub mod pipeline;
 pub mod policy;
 pub mod receipt;
 pub mod signal;
+pub mod tuple_space;
 pub mod workspace;
+
+pub use kdsl::{
+    envelope_to_packet, estimate_tokens, generate_kdsl_system_prompt, kdsl_contract_snippet,
+    packet_to_envelope, packet_token_budget, parse_kdsl, AstCoordinate, AstNodeType, KdslOpcode,
+    KdslOperation, KdslPacket,
+};
+
+pub use tuple_space::{
+    resolve_tuples_dir, Tuple, TuplePattern, TupleSpaceEngine, DEFAULT_TUPLES_DIR,
+    ENV_K0MARU_TUPLE_DIR,
+};
 
 pub use pipeline::{
     execute_pipeline, probe_harness_components, HarnessComponentStatus, HarnessHealthReport,

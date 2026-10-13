@@ -72,6 +72,14 @@ pub enum RouterError {
     /// Pipeline coordination or execution error.
     #[error("Pipeline error: {0}")]
     PipelineError(String),
+
+    /// K-DSL protocol parsing, encoding, or bridging error.
+    #[error("K-DSL protocol error: {0}")]
+    KdslError(String),
+
+    /// Linda Tuple Space error or invariant failure.
+    #[error("Tuple Space error: {0}")]
+    TupleSpaceError(String),
 }
 
 impl PartialEq for RouterError {
@@ -102,6 +110,8 @@ impl PartialEq for RouterError {
             (Self::SignalNotFound(a), Self::SignalNotFound(b)) => a == b,
             (Self::WorkspaceError(a), Self::WorkspaceError(b)) => a == b,
             (Self::PipelineError(a), Self::PipelineError(b)) => a == b,
+            (Self::KdslError(a), Self::KdslError(b)) => a == b,
+            (Self::TupleSpaceError(a), Self::TupleSpaceError(b)) => a == b,
             _ => false,
         }
     }

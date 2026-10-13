@@ -8,12 +8,17 @@ use k0maru_router::decision::{
 use k0maru_router::driver::{AnyDriver, HerdrDriver, MultiplexerDriver, TmuxDriver};
 use k0maru_router::envelope::TaskEnvelope;
 use k0maru_router::error::RouterError;
+use k0maru_router::kdsl::{
+    envelope_to_packet, estimate_tokens, kdsl_contract_snippet, packet_to_envelope,
+    packet_token_budget, parse_kdsl,
+};
 use k0maru_router::memory::NoopMemoryHook;
 use k0maru_router::orchestrator::{discover_default_workspaces, format_ascii_table};
 use k0maru_router::receipt::{resolve_receipts_dir, ExecutionReceipt};
 use k0maru_router::signal::{
     resolve_agent_pane, resolve_signals_dir, SignalStatus, TaskSignal, DEFAULT_SIGNAL_SCHEMA,
 };
+use k0maru_router::tuple_space::{resolve_tuples_dir, Tuple, TuplePattern, TupleSpaceEngine};
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -57,6 +62,17 @@ impl Cli {
                 Some(PipelineAction::Run(args)) => args.json,
                 None => cmd.run_args.json,
             },
+            Commands::Kdsl(cmd) => match &cmd.action {
+                KdslAction::Encode(args) => args.json,
+                KdslAction::Decode(args) => args.json,
+                KdslAction::Contract(args) => args.json,
+            },
+            Commands::Tuple(cmd) => match &cmd.action {
+                TupleAction::Out(args) => args.json,
+                TupleAction::In(args) => args.json,
+                TupleAction::Rd(args) => args.json,
+                TupleAction::List(args) => args.json,
+            },
             Commands::Mcp(_) => false,
         }
     }
@@ -91,6 +107,12 @@ enum Commands {
     /// Execute decoupled end-to-end task pipelines across optional harness components
     #[command(alias = "e2e")]
     Pipeline(PipelineCommand),
+
+    /// Encode, decode, and inspect machine-native K-DSL 0.1 wire packets
+    Kdsl(KdslCommand),
+
+    /// Linda Tuple Space primitives (out, in, rd, list) for associative agent communication
+    Tuple(TupleCommand),
 }
 
 #[derive(Args, Debug, Clone)]
@@ -604,6 +626,176 @@ impl Default for PipelineRunArgs {
             json: false,
         }
     }
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct KdslCommand {
+    #[command(subcommand)]
+    pub action: KdslAction,
+}
+
+#[derive(Subcommand, Debug, Clone)]
+pub enum KdslAction {
+    /// Encode a TaskEnvelope JSON file into a dense K-DSL 0.1 wire string
+    Encode(KdslEncodeArgs),
+    /// Decode a K-DSL 0.1 wire string into structured AST JSON
+    Decode(KdslDecodeArgs),
+    /// Output the machine-native K-DSL system prompt contract
+    Contract(KdslContractArgs),
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct KdslEncodeArgs {
+    /// Path to the TaskEnvelope JSON file (or '-' for stdin)
+    pub file: PathBuf,
+
+    /// Output result as JSON containing wire string, token estimate, and savings
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct KdslDecodeArgs {
+    /// K-DSL wire string (e.g., "!δ:0.1|...")
+    pub wire: String,
+
+    /// Output full TaskEnvelope JSON instead of KdslPacket JSON
+    #[arg(long)]
+    pub envelope: bool,
+
+    /// Output as JSON
+    #[arg(long, default_value_t = true)]
+    pub json: bool,
+}
+
+#[derive(Args, Debug, Clone, Default)]
+pub struct KdslContractArgs {
+    /// Output contract wrapped in JSON object
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct TupleCommand {
+    #[command(subcommand)]
+    pub action: TupleAction,
+}
+
+#[derive(Subcommand, Debug, Clone)]
+pub enum TupleAction {
+    /// Atomically write a tuple into the tuple space (out primitive)
+    Out(TupleOutArgs),
+    /// Atomically find, claim, and consume a matching tuple (in primitive)
+    #[command(name = "in", alias = "take")]
+    In(TupleInArgs),
+    /// Non-destructively read the first matching tuple (rd primitive)
+    Rd(TupleRdArgs),
+    /// List all matching tuples without consumption
+    List(TupleListArgs),
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct TupleOutArgs {
+    /// Tuple classification or event kind (e.g. TASK_READY, TASK_CLAIMED)
+    #[arg(long)]
+    pub kind: String,
+
+    /// Target repository or domain identifier (e.g. AUTH-SRV)
+    #[arg(long)]
+    pub domain: String,
+
+    /// Associated task identifier
+    #[arg(long)]
+    pub task_id: String,
+
+    /// Tuple payload (JSON string or K-DSL wire string)
+    #[arg(long)]
+    pub payload: String,
+
+    /// Optional time-to-live in seconds
+    #[arg(long)]
+    pub ttl: Option<u64>,
+
+    /// Optional explicit tuple identifier
+    #[arg(long)]
+    pub id: Option<String>,
+
+    /// Override tuple space directory (defaults to ~/.k0maru/tuples)
+    #[arg(long)]
+    pub tuple_dir: Option<PathBuf>,
+
+    /// Output JSON formatted tuple
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Args, Debug, Clone, Default)]
+pub struct TupleInArgs {
+    /// Optional kind filter
+    #[arg(long)]
+    pub kind: Option<String>,
+
+    /// Optional domain filter
+    #[arg(long)]
+    pub domain: Option<String>,
+
+    /// Optional task_id filter
+    #[arg(long)]
+    pub task_id: Option<String>,
+
+    /// Override tuple space directory (defaults to ~/.k0maru/tuples)
+    #[arg(long)]
+    pub tuple_dir: Option<PathBuf>,
+
+    /// Output JSON formatted tuple
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Args, Debug, Clone, Default)]
+pub struct TupleRdArgs {
+    /// Optional kind filter
+    #[arg(long)]
+    pub kind: Option<String>,
+
+    /// Optional domain filter
+    #[arg(long)]
+    pub domain: Option<String>,
+
+    /// Optional task_id filter
+    #[arg(long)]
+    pub task_id: Option<String>,
+
+    /// Override tuple space directory (defaults to ~/.k0maru/tuples)
+    #[arg(long)]
+    pub tuple_dir: Option<PathBuf>,
+
+    /// Output JSON formatted tuple
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Args, Debug, Clone, Default)]
+pub struct TupleListArgs {
+    /// Optional kind filter
+    #[arg(long)]
+    pub kind: Option<String>,
+
+    /// Optional domain filter
+    #[arg(long)]
+    pub domain: Option<String>,
+
+    /// Optional task_id filter
+    #[arg(long)]
+    pub task_id: Option<String>,
+
+    /// Override tuple space directory (defaults to ~/.k0maru/tuples)
+    #[arg(long)]
+    pub tuple_dir: Option<PathBuf>,
+
+    /// Output JSON formatted list
+    #[arg(long)]
+    pub json: bool,
 }
 
 fn resolve_driver(name: &str) -> Result<AnyDriver, RouterError> {
@@ -1206,6 +1398,7 @@ fn handle_pipeline(cmd: PipelineCommand) -> Result<(), RouterError> {
                 }
                 println!("Receipts Bus : {}", report.receipts_dir);
                 println!("Signals Bus  : {}", report.signals_dir);
+                println!("Tuples Bus   : {}", report.tuples_dir);
             }
             Ok(())
         }
@@ -1278,6 +1471,197 @@ fn run_pipeline_args(args: PipelineRunArgs) -> Result<(), RouterError> {
     Ok(())
 }
 
+fn handle_kdsl(cmd: KdslCommand) -> Result<(), RouterError> {
+    match cmd.action {
+        KdslAction::Encode(args) => {
+            let content = if args.file.as_os_str() == "-" {
+                let mut buf = String::new();
+                std::io::Read::read_to_string(&mut std::io::stdin(), &mut buf)
+                    .map_err(|e| RouterError::KdslError(format!("Failed to read stdin: {e}")))?;
+                buf
+            } else {
+                std::fs::read_to_string(&args.file).map_err(|e| {
+                    RouterError::KdslError(format!(
+                        "Failed to read envelope file '{}': {e}",
+                        args.file.display()
+                    ))
+                })?
+            };
+
+            let envelope: TaskEnvelope = serde_json::from_str(&content)
+                .map_err(|e| RouterError::KdslError(format!("Invalid TaskEnvelope JSON: {e}")))?;
+
+            let packet = envelope_to_packet(&envelope)?;
+            let wire = packet.to_wire();
+
+            if args.json {
+                let json = serde_json::json!({
+                    "status": "success",
+                    "wire": wire,
+                    "estimated_tokens": estimate_tokens(&wire),
+                    "token_budget": packet_token_budget(&packet),
+                    "packet": packet
+                });
+                println!("{}", serde_json::to_string_pretty(&json)?);
+            } else {
+                println!("{wire}");
+            }
+            Ok(())
+        }
+        KdslAction::Decode(args) => {
+            let packet = parse_kdsl(&args.wire)?;
+            if args.envelope {
+                let env = packet_to_envelope(&packet);
+                println!("{}", serde_json::to_string_pretty(&env)?);
+            } else {
+                println!("{}", serde_json::to_string_pretty(&packet)?);
+            }
+            Ok(())
+        }
+        KdslAction::Contract(args) => {
+            let contract = kdsl_contract_snippet();
+            if args.json {
+                let json = serde_json::json!({
+                    "protocol": "K-DSL",
+                    "version": "0.1",
+                    "contract": contract
+                });
+                println!("{}", serde_json::to_string_pretty(&json)?);
+            } else {
+                println!("{contract}");
+            }
+            Ok(())
+        }
+    }
+}
+
+fn handle_tuple(cmd: TupleCommand) -> Result<(), RouterError> {
+    match cmd.action {
+        TupleAction::Out(args) => {
+            let dir = resolve_tuples_dir(args.tuple_dir.as_deref());
+            let engine = TupleSpaceEngine::new(dir);
+            let mut tuple = Tuple::new(args.kind, args.domain, args.task_id, args.payload);
+            if let Some(id) = args.id {
+                tuple = tuple.with_id(id);
+            }
+            if let Some(ttl) = args.ttl {
+                tuple = tuple.with_ttl(ttl);
+            }
+            let saved = engine.out(tuple)?;
+            if args.json {
+                println!("{}", serde_json::to_string_pretty(&saved)?);
+            } else {
+                println!(
+                    "TUPLE OUT: id={} kind={} domain={} task_id={}",
+                    saved.id, saved.kind, saved.domain, saved.task_id
+                );
+            }
+            Ok(())
+        }
+        TupleAction::In(args) => {
+            let dir = resolve_tuples_dir(args.tuple_dir.as_deref());
+            let engine = TupleSpaceEngine::new(dir);
+            let mut pattern = TuplePattern::new();
+            if let Some(k) = args.kind {
+                pattern = pattern.with_kind(k);
+            }
+            if let Some(d) = args.domain {
+                pattern = pattern.with_domain(d);
+            }
+            if let Some(t) = args.task_id {
+                pattern = pattern.with_task_id(t);
+            }
+            let claimed = engine.take(&pattern)?;
+            match claimed {
+                Some(t) => {
+                    if args.json {
+                        println!("{}", serde_json::to_string_pretty(&t)?);
+                    } else {
+                        println!(
+                            "TUPLE IN: id={} kind={} domain={} task_id={} payload={}",
+                            t.id, t.kind, t.domain, t.task_id, t.payload
+                        );
+                    }
+                    Ok(())
+                }
+                None => {
+                    if args.json {
+                        let not_found = serde_json::json!({ "status": "not_found" });
+                        println!("{}", serde_json::to_string_pretty(&not_found)?);
+                    } else {
+                        println!("No matching tuple found in space");
+                    }
+                    Ok(())
+                }
+            }
+        }
+        TupleAction::Rd(args) => {
+            let dir = resolve_tuples_dir(args.tuple_dir.as_deref());
+            let engine = TupleSpaceEngine::new(dir);
+            let mut pattern = TuplePattern::new();
+            if let Some(k) = args.kind {
+                pattern = pattern.with_kind(k);
+            }
+            if let Some(d) = args.domain {
+                pattern = pattern.with_domain(d);
+            }
+            if let Some(t) = args.task_id {
+                pattern = pattern.with_task_id(t);
+            }
+            let found = engine.rd(&pattern)?;
+            match found {
+                Some(t) => {
+                    if args.json {
+                        println!("{}", serde_json::to_string_pretty(&t)?);
+                    } else {
+                        println!(
+                            "TUPLE RD: id={} kind={} domain={} task_id={} payload={}",
+                            t.id, t.kind, t.domain, t.task_id, t.payload
+                        );
+                    }
+                    Ok(())
+                }
+                None => {
+                    if args.json {
+                        let not_found = serde_json::json!({ "status": "not_found" });
+                        println!("{}", serde_json::to_string_pretty(&not_found)?);
+                    } else {
+                        println!("No matching tuple found in space");
+                    }
+                    Ok(())
+                }
+            }
+        }
+        TupleAction::List(args) => {
+            let dir = resolve_tuples_dir(args.tuple_dir.as_deref());
+            let engine = TupleSpaceEngine::new(dir);
+            let mut pattern = TuplePattern::new();
+            if let Some(k) = args.kind {
+                pattern = pattern.with_kind(k);
+            }
+            if let Some(d) = args.domain {
+                pattern = pattern.with_domain(d);
+            }
+            if let Some(t) = args.task_id {
+                pattern = pattern.with_task_id(t);
+            }
+            let tuples = engine.list(&pattern)?;
+            if args.json {
+                println!("{}", serde_json::to_string_pretty(&tuples)?);
+            } else {
+                println!("Found {} tuple(s):", tuples.len());
+                for t in &tuples {
+                    println!(
+                        "  - [{}] kind={} domain={} task_id={}",
+                        t.id, t.kind, t.domain, t.task_id
+                    );
+                }
+            }
+            Ok(())
+        }
+    }
+}
+
 fn run(cli: Cli) -> Result<(), RouterError> {
     match cli.command {
         Commands::Status(args) => handle_status(args),
@@ -1294,6 +1678,8 @@ fn run(cli: Cli) -> Result<(), RouterError> {
         Commands::Signal(args) => handle_signal(args),
         Commands::Orchestrator(cmd) => handle_orchestrator(cmd),
         Commands::Pipeline(cmd) => handle_pipeline(cmd),
+        Commands::Kdsl(cmd) => handle_kdsl(cmd),
+        Commands::Tuple(cmd) => handle_tuple(cmd),
     }
 }
 
@@ -1327,6 +1713,8 @@ fn main() -> ExitCode {
                     RouterError::SignalNotFound(_) => "SignalNotFound",
                     RouterError::WorkspaceError(_) => "WorkspaceError",
                     RouterError::PipelineError(_) => "PipelineError",
+                    RouterError::KdslError(_) => "KdslError",
+                    RouterError::TupleSpaceError(_) => "TupleSpaceError",
                 };
                 let json_err = serde_json::json!({
                     "status": "error",
