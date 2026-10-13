@@ -31,6 +31,8 @@ pub struct HarnessHealthReport {
     pub components: Vec<HarnessComponentStatus>,
     pub receipts_dir: String,
     pub signals_dir: String,
+    #[serde(default)]
+    pub tuples_dir: String,
 }
 
 /// Probe host environment for an executable binary.
@@ -109,12 +111,16 @@ pub fn probe_harness_components() -> HarnessHealthReport {
     let signals_dir = crate::signal::resolve_signals_dir(None)
         .to_string_lossy()
         .to_string();
+    let tuples_dir = crate::tuple_space::resolve_tuples_dir(None)
+        .to_string_lossy()
+        .to_string();
 
     HarnessHealthReport {
         is_complete,
         components,
         receipts_dir,
         signals_dir,
+        tuples_dir,
     }
 }
 
