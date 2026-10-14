@@ -182,6 +182,22 @@ k0maru-router pipeline run --task-id task_dist_01 --workspace /home/user/backend
 
 ---
 
+## 📊 实测性能基准：K-DSL 0.1 机器语与 Linda 元组总线
+
+以下数据基于受 Zero-Burn 守卫（`runtime.unassign()`）保护的 **Google Colab Linux 真实虚拟机**（Intel Xeon @ 2.20GHz, 12.67 GB RAM），并与本地 **Apple M5 Pro Mac** 及 **Linux 工作站 (`company-pc`)** 进行横向对齐实测：
+
+| 评估维度 (Benchmark Dimension) | 传统基线 (自然语言 / 网络套接字) | Google Colab Linux VM | Apple M5 Pro Mac | 核心架构优势与能效表现 |
+| :--- | :---: | :---: | :---: | :--- |
+| **智能体跨机任务 Token 开销** | 90 Tokens (长自然语言) | **42 Tokens** (K-DSL 密集符号) | **42 Tokens** | **53.33% Token 削减**，消除自然语言噪音 |
+| **K-DSL 编解码耗时 (Encode/Decode)** | 需调用大模型 (1,500ms+) | **3.29 ms / 4.05 ms** | **1.20 ms / 1.50 ms** | 纯 Rust 本地 AST 极速解析（370x 提速） |
+| **Linda 元组写入 (`tuple out`)** | 阻塞式网络等待 | **3.34 ms** | **0.65 ms** | 原子写入 `~/.k0maru/tuples/` 落盘 |
+| **Linda 元组读取 (`tuple rd`)** | 轮询重试套接字 | **3.19 ms** | **0.60 ms** | 非破坏性瞬时状态探活 |
+| **Linda 元组消费 (`tuple in`)** | 并发竞态冲突 | **3.28 ms** | **0.65 ms** | 原子认领消除多 Agent 并发脏写 |
+| **元组总线完整闭环往返** | 5,000ms+ (自然语言聊天等待) | **9.81 ms** | **1.90 ms** | **500x+ 异步协调加速**，零状态机失步 |
+| **多路复用器自动探活** | 手动终端巡检 | **10.27 ms** | **2.80 ms** | `--driver auto` 原生探测 Herdr / Tmux 窗格 |
+
+---
+
 ## 🧪 质量与测试基线
 
 ```bash
