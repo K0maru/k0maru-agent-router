@@ -69,37 +69,48 @@ k0maru-router --version
 ### 2. CLI Usage
 
 ```bash
-# 1. System Health & Multiplexer Driver Availability
+# 1. System Health & Multiplexer Driver Availability (--driver auto detects Herdr + tmux by default)
 k0maru-router status
-k0maru-router probe --workspace /path/to/target-project
+k0maru-router probe --workspace /path/to/target-project --driver auto
 
-# 2. Route Task Envelopes (Auto / Rule / Laya System-1)
+# 2. Machine-Native K-DSL 0.1 Protocol (Contract, Lossless Encode & Decode)
+k0maru-router kdsl contract
+k0maru-router kdsl encode task.json
+k0maru-router kdsl decode "!δ:0.1|ROUTER|src/main.rs#dev §AST:fn[main] @OP:PATCH(target) -> (replacement) !Σ:VERIFY(cargo_test)"
+
+# 3. Linda Tuple Space Asynchronous Bus (~/.k0maru/tuples/)
+k0maru-router tuple out --kind TASK_READY --domain ROUTER --task-id TICK-01 --payload '{"task":"fix route"}'
+k0maru-router tuple rd --kind TASK_READY --domain ROUTER
+k0maru-router tuple in --kind TASK_READY --domain ROUTER
+k0maru-router tuple list
+
+# 4. Route Task Envelopes (Auto / Rule / Laya System-1)
 k0maru-router route --file task.json
 k0maru-router route --file task.json --dry-run
 k0maru-router route --file task.json --isolate
 
-# 3. HITL Outbox Management (External Quarantine Gate)
+# 5. HITL Outbox Management (External Quarantine Gate)
 k0maru-router outbox list
 k0maru-router outbox inspect --id <task_id>
 k0maru-router outbox approve --id <task_id>
 k0maru-router outbox reject --id <task_id>
 
-# 4. Master-Worker Signal Ingest Bus (Worker Completion Signaling)
+# 6. Master-Worker Signal Ingest Bus (Worker Completion Signaling)
 k0maru-router signal --task-id task_01 --status completed --summary "Bug fixed"
 k0maru-router signal --task-id task_02 --status failed --summary "Tests failed"
 k0maru-router signal --task-id task_03 --status in_progress --json
 
-# 5. Zero-Daemon Global Status Inspector (<30ms, All Workspaces)
+# 7. Zero-Daemon Global Status Inspector (<30ms, All Workspaces)
 k0maru-router orchestrator status
 k0maru-router orchestrator status --json
 k0maru-router orchestrator status --workspaces /path/to/ws1,/path/to/ws2
 
-# 6. Cryptographic Execution Receipt Engine (agent-receipt-v1)
+# 8. Cryptographic Execution Receipt Engine (agent-receipt-v1)
 k0maru-router receipt ingest --file /path/to/agent-receipt-v1.json
 k0maru-router receipt status <task_id>
 k0maru-router receipt list
 
-# 7. Distributed Tailscale & SSH Command Dispatch
+# 9. Distributed Tailscale & SSH Command Dispatch
 # Probe remote Linux/macOS host over Tailscale/SSH (auto-detects tmux vs herdr)
 k0maru-router status --node company-linux
 k0maru-router probe --workspace /home/user/backend --node company-linux

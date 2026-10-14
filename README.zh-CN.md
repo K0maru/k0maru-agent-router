@@ -69,37 +69,48 @@ k0maru-router --version
 ### 2. 命令行工具（CLI）常用指令
 
 ```bash
-# 1. 查看路由器运行健康状态与物理寻址探查
+# 1. 查看路由器运行健康状态与物理寻址探查（默认 --driver auto 自动嗅探 Herdr 与 tmux）
 k0maru-router status
-k0maru-router probe --workspace /path/to/target-project
+k0maru-router probe --workspace /path/to/target-project --driver auto
 
-# 2. 路由分发指定的 TaskEnvelope 任务信封
+# 2. 机器原生通信协议 K-DSL 0.1（契约导出、无损编码与解码）
+k0maru-router kdsl contract
+k0maru-router kdsl encode task.json
+k0maru-router kdsl decode "!δ:0.1|ROUTER|src/main.rs#dev §AST:fn[main] @OP:PATCH(target) -> (replacement) !Σ:VERIFY(cargo_test)"
+
+# 3. Linda 元组空间异步状态总线（物理落盘于 ~/.k0maru/tuples/）
+k0maru-router tuple out --kind TASK_READY --domain ROUTER --task-id TICK-01 --payload '{"task":"fix route"}'
+k0maru-router tuple rd --kind TASK_READY --domain ROUTER
+k0maru-router tuple in --kind TASK_READY --domain ROUTER
+k0maru-router tuple list
+
+# 4. 路由分发指定的 TaskEnvelope 任务信封
 k0maru-router route --file task.json
 k0maru-router route --file task.json --dry-run
 k0maru-router route --file task.json --isolate
 
-# 3. 管理人在回路（HITL）出站暂存区中的工单草稿
+# 5. 管理人在回路（HITL）出站暂存区中的工单草稿
 k0maru-router outbox list
 k0maru-router outbox inspect --id <task_id>
 k0maru-router outbox approve --id <task_id>
 k0maru-router outbox reject --id <task_id>
 
-# 4. 从属智能体任务执行完成/进度信号发射（Worker Signal Ingest Bus）
+# 6. 从属智能体任务执行完成/进度信号发射（Worker Signal Ingest Bus）
 k0maru-router signal --task-id task_01 --status completed --summary "修复完成"
 k0maru-router signal --task-id task_02 --status failed --summary "单元测试失败"
 k0maru-router signal --task-id task_03 --status in_progress --json
 
-# 5. 主控全局状态极速巡检（<30ms 零守护进程，一键扫描全矩阵工作区）
+# 7. 主控全局状态极速巡检（<30ms 零守护进程，一键扫描全矩阵工作区）
 k0maru-router orchestrator status
 k0maru-router orchestrator status --json
 k0maru-router orchestrator status --workspaces /path/to/ws1,/path/to/ws2
 
-# 6. 确定性执行收据验证与查询（agent-receipt-v1）
+# 8. 确定性执行收据验证与查询（agent-receipt-v1）
 k0maru-router receipt ingest --file /path/to/agent-receipt-v1.json
 k0maru-router receipt status <task_id>
 k0maru-router receipt list
 
-# 7. 分布式 Tailscale & SSH 跨主机调度（支持 tmux 与 herdr 自动嗅探）
+# 9. 分布式 Tailscale & SSH 跨主机调度（支持 tmux 与 herdr 自动嗅探）
 # 探测远端 Linux/macOS 主机驱动与存活会话
 k0maru-router status --node company-linux
 k0maru-router probe --workspace /home/user/backend --node company-linux
