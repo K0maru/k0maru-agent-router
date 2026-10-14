@@ -126,7 +126,7 @@ pub struct StatusArgs {
     pub outbox_dir: PathBuf,
 
     /// Multiplexer driver to inspect (supported: tmux, herdr, auto)
-    #[arg(long, default_value = "tmux")]
+    #[arg(long, default_value = "auto")]
     pub driver: String,
 
     /// Optional remote node hostname or Tailscale alias (e.g. "company-linux")
@@ -154,7 +154,7 @@ pub struct ProbeArgs {
     pub positional_workspace: Option<PathBuf>,
 
     /// Multiplexer driver to use (supported: tmux, herdr, auto)
-    #[arg(long, default_value = "tmux")]
+    #[arg(long, default_value = "auto")]
     pub driver: String,
 
     /// Optional remote node hostname or Tailscale alias (e.g. "company-linux")
@@ -191,7 +191,7 @@ pub struct RouteArgs {
     pub positional_file: Option<PathBuf>,
 
     /// Multiplexer driver to use (supported: tmux, herdr, auto)
-    #[arg(long, default_value = "tmux")]
+    #[arg(long, default_value = "auto")]
     pub driver: String,
 
     /// Optional remote node hostname or Tailscale alias (e.g. "company-linux")
@@ -246,8 +246,8 @@ impl RouteArgs {
 
 #[derive(Args, Debug, Clone)]
 pub struct McpArgs {
-    /// Multiplexer driver to use (supported: tmux)
-    #[arg(long, default_value = "tmux")]
+    /// Multiplexer driver to use (supported: tmux, herdr, auto)
+    #[arg(long, default_value = "auto")]
     pub driver: String,
 
     /// Path to the staged outbox directory

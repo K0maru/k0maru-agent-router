@@ -141,14 +141,17 @@ fn create_sample_receipt(
 
 #[test]
 fn test_cli_status_text_and_json() {
-    // Text output
+    // Text output (default driver is auto, resolving to herdr or tmux)
     router_cmd()
         .arg("status")
         .assert()
         .success()
         .code(0)
         .stdout(predicate::str::contains("k0maru-router"))
-        .stdout(predicate::str::contains("Multiplexer Driver: tmux"))
+        .stdout(
+            predicate::str::contains("Multiplexer Driver: herdr")
+                .or(predicate::str::contains("Multiplexer Driver: tmux")),
+        )
         .stdout(predicate::str::contains("HITL Outbox"));
 
     // JSON output
@@ -161,9 +164,30 @@ fn test_cli_status_text_and_json() {
     let stdout = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
     let val: serde_json::Value = serde_json::from_str(&stdout).unwrap();
     assert_eq!(val["version"], "0.1.0");
-    assert_eq!(val["driver"]["name"], "tmux");
+    let driver_name = val["driver"]["name"].as_str().unwrap();
+    assert!(
+        driver_name == "tmux" || driver_name == "herdr",
+        "expected driver name 'tmux' or 'herdr', got: {driver_name}"
+    );
     assert!(val["driver"]["available"].is_boolean());
     assert!(val["outbox"]["total"].is_number());
+
+    // Explicit tmux driver flag text and JSON verification
+    router_cmd()
+        .args(["status", "--driver", "tmux"])
+        .assert()
+        .success()
+        .code(0)
+        .stdout(predicate::str::contains("Multiplexer Driver: tmux"));
+
+    let assert_tmux = router_cmd()
+        .args(["status", "--driver", "tmux", "--json"])
+        .assert()
+        .success()
+        .code(0);
+    let stdout_tmux = String::from_utf8(assert_tmux.get_output().stdout.clone()).unwrap();
+    let val_tmux: serde_json::Value = serde_json::from_str(&stdout_tmux).unwrap();
+    assert_eq!(val_tmux["driver"]["name"], "tmux");
 }
 
 #[test]
@@ -200,6 +224,19 @@ fn test_cli_probe_workspace() {
         .failure()
         .code(1)
         .stderr(predicate::str::contains("Target workspace not found"));
+}
+
+#[test]
+fn test_cli_default_driver_is_auto() {
+    for cmd in ["status", "probe", "route", "mcp"] {
+        router_cmd()
+            .args([cmd, "--help"])
+            .assert()
+            .success()
+            .code(0)
+            .stdout(predicate::str::contains("--driver"))
+            .stdout(predicate::str::contains("[default: auto]"));
+    }
 }
 
 // ============================================================================
